@@ -89,6 +89,47 @@ def test_sim_event_is_forwarded_to_bridge(tmp_path: Path):
     assert runtime.bridge.events == [("FLAPS_INCR", None)]
 
 
+def test_ambiguous_identical_fallback_is_not_silently_selected(tmp_path: Path):
+    store = ConfigStore(tmp_path / "config.json")
+    runtime = RecordingRuntime(store)
+    saved = {
+        "device_key": "old-fallback-key",
+        "name": "Wireless Controller",
+        "serial": None,
+        "path": None,
+        "guid": "same-guid",
+        "vendor_id": 1356,
+        "product_id": 3302,
+    }
+    snapshots = {
+        "pad-a": {"identity": {**saved, "device_key": "pad-a"}},
+        "pad-b": {"identity": {**saved, "device_key": "pad-b"}},
+    }
+
+    match = runtime._find_device_for_saved_identity(saved, snapshots, already_used=set())
+    assert match is None
+
+
+def test_unique_fallback_can_be_recovered(tmp_path: Path):
+    store = ConfigStore(tmp_path / "config.json")
+    runtime = RecordingRuntime(store)
+    saved = {
+        "device_key": "old-fallback-key",
+        "name": "Xbox Controller",
+        "serial": None,
+        "path": None,
+        "guid": "xbox-guid",
+        "vendor_id": 1118,
+        "product_id": 654,
+    }
+    snapshots = {
+        "new-key": {"identity": {**saved, "device_key": "new-key"}},
+    }
+
+    match = runtime._find_device_for_saved_identity(saved, snapshots, already_used=set())
+    assert match == "new-key"
+
+
 def test_config_role_assignment_and_binding_edit_survive_reload(tmp_path: Path):
     path = tmp_path / "config.json"
     store = ConfigStore(path)
