@@ -14,10 +14,22 @@ from .simconnect_bridge import SimConnectBridge
 
 ROLES = ("left", "center", "right")
 
+# Per-control precision profile. A scale > 1 means more stick travel is needed
+# for one logical detent, i.e. lower sensitivity / finer cockpit control.
+# V/S uses 100-fpm simulator steps, so it intentionally needs substantially
+# more angular travel than SPD/HDG/ALT in both slow and fast rotation modes.
+ROTARY_PRECISION_SCALES: dict[tuple[str, str], tuple[float, float]] = {
+    ("right", "right"): (1.50, 1.50),  # FCU V/S
+}
+
 
 def enabled_roles(cfg: dict[str, Any]) -> tuple[str, ...]:
     center_enabled = bool(cfg.get("features", {}).get("center_controller_enabled", False))
     return tuple(role for role in ROLES if role != "center" or center_enabled)
+
+
+def rotary_precision_scales(role: str, stick: str) -> tuple[float, float]:
+    return ROTARY_PRECISION_SCALES.get((role, stick), (1.0, 1.0))
 
 
 def _stick_live(axes: dict[str, Any], stick: str) -> dict[str, float]:
@@ -321,11 +333,14 @@ class Runtime:
             binding = next((b for b in bindings if b.get("trigger") == f"rotary:{stick}"), None)
             if not binding:
                 continue
+            slow_scale, fast_scale = rotary_precision_scales(role, stick)
             detents = self.rotary.update(
                 device_key,
                 stick,
                 float(axes[f"{stick}_x"]),
                 float(axes[f"{stick}_y"]),
+                slow_scale=slow_scale,
+                fast_scale=fast_scale,
             )
             if not detents:
                 continue

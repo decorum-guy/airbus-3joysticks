@@ -16,7 +16,7 @@ class RotaryState:
     last_update_at: float | None = None
     smoothed_speed_dps: float = 0.0
     last_detent_at: float = 0.0
-    active_detent_degrees: float = 45.0
+    active_detent_degrees: float = 50.0
 
 
 class RotaryEngine:
@@ -25,6 +25,9 @@ class RotaryEngine:
     The production profile is deliberately precision-first. Slow rotation uses
     a large angular detent so a pilot can dial an exact value. As angular speed
     rises, the detent becomes smaller, allowing faster coarse changes.
+
+    Per-update slow/fast scale values allow individual controls (notably V/S)
+    to be made more precise without making every FCU rotary equally sluggish.
 
     A hard event-rate limiter is also applied. Excess detents are *dropped*,
     never queued, so a fast spin cannot keep changing the FCU after the stick
@@ -43,7 +46,7 @@ class RotaryEngine:
         inner_radius: float,
         detent_degrees: float,
         *,
-        slow_detent_degrees: float = 45.0,
+        slow_detent_degrees: float = 50.0,
         fast_detent_degrees: float = 15.0,
         acceleration_start_dps: float = 180.0,
         acceleration_full_dps: float = 720.0,
@@ -87,17 +90,31 @@ class RotaryEngine:
             if key[0] == device_key:
                 del self._states[key]
 
-    def _adaptive_detent(self, speed_dps: float) -> float:
+    def _adaptive_detent(
+        self,
+        speed_dps: float,
+        *,
+        slow_scale: float = 1.0,
+        fast_scale: float = 1.0,
+    ) -> float:
+        slow_scale = float(slow_scale)
+        fast_scale = float(fast_scale)
+        if slow_scale <= 0 or fast_scale <= 0:
+            raise ValueError("rotary precision scales must be positive")
+
+        slow_threshold = self.slow_detent_degrees * slow_scale
+        fast_threshold = self.fast_detent_degrees * fast_scale
+        if fast_threshold > slow_threshold:
+            raise ValueError("scaled fast detent must be <= scaled slow detent")
+
         if speed_dps <= self.acceleration_start_dps:
-            return self.slow_detent_degrees
+            return slow_threshold
         if speed_dps >= self.acceleration_full_dps:
-            return self.fast_detent_degrees
+            return fast_threshold
         progress = (speed_dps - self.acceleration_start_dps) / (
             self.acceleration_full_dps - self.acceleration_start_dps
         )
-        return self.slow_detent_degrees + (
-            self.fast_detent_degrees - self.slow_detent_degrees
-        ) * progress
+        return slow_threshold + (fast_threshold - slow_threshold) * progress
 
     def debug_state(self, device_key: str, stick: str) -> dict[str, float | bool | None]:
         state = self._states.get((device_key, stick))
@@ -115,10 +132,21 @@ class RotaryEngine:
             "accumulated_degrees": state.accumulated_degrees,
         }
 
-    def update(self, device_key: str, stick: str, x: float, y: float, now: float | None = None) -> int:
+    def update(
+        self,
+        device_key: str,
+        stick: str,
+        x: float,
+        y: float,
+        now: float | None = None,
+        *,
+        slow_scale: float = 1.0,
+        fast_scale: float = 1.0,
+    ) -> int:
         now = now if now is not None else time.monotonic()
         key = (device_key, stick)
-        state = self._states.setdefault(key, RotaryState(active_detent_degrees=self.slow_detent_degrees))
+        initial_threshold = self.slow_detent_degrees * float(slow_scale)
+        state = self._states.setdefault(key, RotaryState(active_detent_degrees=initial_threshold))
         radius = math.hypot(x, y)
 
         if radius <= self.inner_radius:
@@ -127,7 +155,7 @@ class RotaryEngine:
             state.accumulated_degrees = 0.0
             state.last_update_at = None
             state.smoothed_speed_dps = 0.0
-            state.active_detent_degrees = self.slow_detent_degrees
+            state.active_detent_degrees = initial_threshold
             # Re-centering intentionally clears the limiter too: the next
             # deliberate turn should feel immediately responsive.
             state.last_detent_at = 0.0
@@ -141,7 +169,7 @@ class RotaryEngine:
             state.accumulated_degrees = 0.0
             state.last_update_at = now
             state.smoothed_speed_dps = 0.0
-            state.active_detent_degrees = self.slow_detent_degrees
+            state.active_detent_degrees = initial_threshold
             return 0
 
         current_angle = math.atan2(-y, x)
@@ -172,7 +200,11 @@ class RotaryEngine:
             # reaching the fast profile within a fraction of a revolution.
             state.smoothed_speed_dps = 0.72 * state.smoothed_speed_dps + 0.28 * instant_speed
 
-        threshold = self._adaptive_detent(state.smoothed_speed_dps)
+        threshold = self._adaptive_detent(
+            state.smoothed_speed_dps,
+            slow_scale=slow_scale,
+            fast_scale=fast_scale,
+        )
         state.active_detent_degrees = threshold
         state.accumulated_degrees += clockwise_degrees
 
