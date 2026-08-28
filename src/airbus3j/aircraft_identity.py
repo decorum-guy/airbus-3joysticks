@@ -72,7 +72,7 @@ def classify_aircraft(
     manifest = manifest or {}
     cfg_block = cfg_block or {}
     title_norm = (title or "").strip().lower()
-    haystack = " ".join(
+    package_evidence = " ".join(
         str(value or "").lower()
         for value in (
             package_name,
@@ -81,28 +81,35 @@ def classify_aircraft(
             cfg_block.get("base_container"),
             cfg_block.get("ui_createdby"),
             cfg_block.get("ui_type"),
-            title,
         )
     )
 
-    evidence: list[str] = []
-    if title_norm in LEGACY_ASOBO_TITLES:
-        evidence.append(f"SimConnect TITLE matches a known legacy Asobo A320neo livery title: {title}")
-    if "asobo-aircraft-a320-neo" in haystack or "asobo_a320_neo" in haystack:
-        evidence.append("package/base-container identifies Asobo A320neo")
-    if evidence:
-        return {"family": "asobo_legacy_a320neo", "confidence": "high", "evidence": evidence}
-    if "flybywire" in haystack or "a32nx" in haystack:
+    # Explicit package/container metadata wins over the SimConnect title. A
+    # livery is allowed to reuse a human-readable title, so title alone must
+    # never override a package that clearly identifies another implementation.
+    if "flybywire" in package_evidence or "a32nx" in package_evidence:
         return {
             "family": "flybywire_a32nx",
             "confidence": "high",
             "evidence": ["package/creator/base-container contains FlyByWire/A32NX identity"],
         }
-    if "inibuilds" in haystack and ("a320" in haystack or "a32n" in haystack):
+    if "inibuilds" in package_evidence and ("a320" in package_evidence or "a32n" in package_evidence):
         return {
             "family": "inibuilds_a320neo",
             "confidence": "high",
             "evidence": ["package/creator identity contains iniBuilds and A320"],
+        }
+    if "asobo-aircraft-a320-neo" in package_evidence or "asobo_a320_neo" in package_evidence:
+        return {
+            "family": "asobo_legacy_a320neo",
+            "confidence": "high",
+            "evidence": ["package/base-container identifies Asobo A320neo"],
+        }
+    if title_norm in LEGACY_ASOBO_TITLES:
+        return {
+            "family": "asobo_legacy_a320neo",
+            "confidence": "high",
+            "evidence": [f"SimConnect TITLE matches a known legacy Asobo A320neo livery title: {title}"],
         }
     return {"family": "unknown_a320", "confidence": "low", "evidence": []}
 
