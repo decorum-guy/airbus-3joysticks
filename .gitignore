@@ -11,3 +11,4 @@ build/
 .vscode/
 .idea/
 diagnostics-report.json
+fcu-probe-report.json
