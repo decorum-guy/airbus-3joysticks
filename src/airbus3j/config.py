@@ -32,6 +32,12 @@ def default_config() -> dict[str, Any]:
     return {
         "version": 1,
         "server": {"host": "0.0.0.0", "port": 8765},
+        "features": {
+            # Current physical setup has two working gamepads. Keep the complete
+            # CENTER/EFIS/RADIO profile in the project, but do not require or
+            # route a third controller until this flag is explicitly enabled.
+            "center_controller_enabled": False,
+        },
         "roles": {
             "left": {"display_name": "LEFT · FCU SPD / HDG", "device": None},
             "center": {"display_name": "CENTER · EFIS / RADIO", "device": None},
