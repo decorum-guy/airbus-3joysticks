@@ -137,8 +137,9 @@ def test_rate_limiter_drops_excess_instead_of_building_backlog():
 def test_counter_clockwise_is_negative():
     r = engine(max_events_per_second=100.0)
     assert r.update("pad", "left", 1.0, 0.0, now=0.0) == 0
-    # Screen-space upward quarter-turn is counter-clockwise.
-    assert r.update("pad", "left", 0.707, -0.707, now=0.3) == -1
+    # A deliberate 60-degree upward turn exceeds the 50-degree slow threshold
+    # and must emit one counter-clockwise detent.
+    assert r.update("pad", "left", 0.5, -0.8660254, now=0.3) == -1
 
 
 def test_center_resets_tracking_and_next_outer_position_only_rearms():
