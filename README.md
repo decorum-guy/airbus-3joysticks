@@ -4,37 +4,51 @@ Turn ordinary gamepads into a compact Airbus A320neo home-cockpit control panel 
 
 ## Current status
 
-The project is now a **two-controller flight-usable MVP**. LEFT and RIGHT are active by default; the complete CENTER / EFIS / RADIO profile remains preserved behind a feature flag until a third controller is available.
+The project is now a **two-controller FlyByWire A32NX flight-ready MVP**. LEFT and RIGHT are active by default; the complete CENTER / EFIS / RADIO profile remains preserved behind a feature flag until a third controller is available.
 
-Validated on the tested MSFS 2020 A320neo setup:
+Validated on the current MSFS 2020 + FlyByWire A32NX setup:
 
 - persistent LEFT / RIGHT identity by hardware serial;
 - circular thumbstick motion -> virtual rotary detents;
-- SPEED increment/decrement;
-- HEADING increment/decrement;
-- ALTITUDE increment/decrement;
-- V/S increment (decrement has one final focused validation probe);
+- SPEED / HEADING / ALTITUDE / V/S increment and decrement;
+- per-control persistent rotary sensitivity from the browser, with reset-to-default controls;
+- FlyByWire A32NX SPD / HDG / ALT / V/S PUSH and PULL;
+- FlyByWire A32NX SPD/MACH and HDG/TRK · V/S/FPA toggles;
+- FlyByWire A32NX AP1 / AP2 / A/THR / LOC / APPR button events;
 - SimConnect reconnecting event bridge;
 - live FCU telemetry in the browser;
 - Bluetooth PS4-compatible rumble using SDL GameController with extended reports;
 - separate haptic intensity for rotary detents and warning cues;
 - live LAN dashboard with stick position, pressed buttons, device status and readiness.
 
-Exact Airbus-specific FCU PUSH/PULL, AP1/AP2, A/THR, SPD/MACH, TRK/FPA and some EFIS functions are intentionally still `pending` until their aircraft-specific backend is verified. The app never substitutes a plausible-but-wrong generic event for these controls.
+FlyByWire custom events are **aircraft guarded**. The runtime identifies the current SimConnect aircraft title and refuses to send any `A32NX.*` event while another aircraft is loaded. Generic rotaries/flaps/spoilers may still work on other aircraft, but the dashboard marks the aircraft backend as generic-only.
 
 ## Physical layout
 
 ### LEFT · FCU SPD / HDG
 
 - left stick circular rotation -> SPEED
+- L3 -> SPD PUSH / managed
+- L1 + L3 -> SPD PULL / selected
 - right stick circular rotation -> HEADING
-- stick clicks and L1+stick clicks are reserved for exact Airbus PUSH/PULL
-- face/D-pad buttons contain AP/LOC/APPR and pending Airbus-specific functions
+- R3 -> HDG PUSH / managed NAV
+- L1 + R3 -> HDG PULL / selected
+- □ / X -> AP1
+- ○ / B -> AP2
+- × / A -> A/THR
+- △ / Y -> APPR
+- D-pad left -> LOC
+- D-pad up -> SPD / MACH
+- D-pad down -> HDG/TRK · V/S/FPA toggle
 
 ### RIGHT · FCU ALT / V/S
 
 - left stick circular rotation -> ALTITUDE
+- L3 -> ALT PUSH / managed
+- L1 + L3 -> ALT PULL / open climb/descent
 - right stick circular rotation -> V/S
+- R3 -> V/S PUSH / level off
+- L1 + R3 -> V/S PULL / selected V/S
 - D-pad -> flaps / speedbrake
 - face buttons -> spoiler arm / autobrake functions
 
@@ -48,6 +62,7 @@ Requirements:
 
 - Windows 10/11 x64
 - Microsoft Flight Simulator 2020
+- FlyByWire A32NX Stable for the full aircraft-specific control set
 - Python 3.12 x64 recommended
 - two currently active controllers connected
 
@@ -66,16 +81,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 
 `run.ps1` is self-bootstrapping: if `.venv` does not exist, it runs `scripts/setup.ps1` automatically.
 
+At startup, the app safely promotes old `pending` Airbus-specific bindings in an existing config to the FlyByWire production profile. Device assignments, haptics, sensitivity settings and custom user bindings are preserved. A custom binding is never overwritten merely because a built-in production action exists for the same physical button.
+
 ## Normal flight workflow
 
-1. Start MSFS 2020 and load the tested A320neo into the cockpit.
-2. Connect the LEFT and RIGHT controllers.
-3. Run `scripts/run.ps1`.
-4. Open the dashboard printed in the terminal.
-5. Wait for **READY TO FLY**.
-6. Rotate the sticks around their outer circle to change FCU targets.
+1. Start MSFS 2020 and load **FlyByWire A32NX** into the cockpit.
+2. Wait until the aircraft cockpit has finished loading.
+3. Connect the LEFT and RIGHT controllers.
+4. Run `scripts/run.ps1`.
+5. Open the dashboard printed in the terminal.
+6. Wait for the controllers + SimConnect readiness indication.
+7. Confirm the extra aircraft-backend pill says **A32NX · FULL CONTROLS**.
+8. Use the sticks/buttons normally.
 
-The service deliberately drops control events while SimConnect is offline rather than replaying stale knob turns after reconnect.
+The service deliberately drops control events while SimConnect is offline rather than replaying stale knob turns after reconnect. It also blocks A32NX-only commands when the wrong aircraft is loaded.
 
 ## Browser pages
 
@@ -90,9 +109,11 @@ The service binds to `0.0.0.0:8765` by default.
 The dashboard shows:
 
 - current SimConnect connection and aircraft title;
+- live aircraft-backend state (`A32NX · FULL CONTROLS` or generic-only);
 - live selected SPD / HDG / ALT / V/S telemetry;
 - LEFT/RIGHT online state and serial identity;
 - live thumbstick position/radius/angle;
+- per-control sensitivity sliders and reset buttons;
 - pressed buttons;
 - current binding labels and pending markers;
 - last dispatched action;
@@ -111,7 +132,7 @@ The project uses physically different profiles:
 
 Overall strength remains independently adjustable for both channels at `/haptics`.
 
-Real aircraft warning signals (Master Warning / Master Caution / stall cue, etc.) are a later aircraft-data integration layer; the warning haptic channel and test UI already exist.
+Real FlyByWire warning signals (Master Warning / Master Caution / selected additional cues) are the next aircraft-data integration layer; the warning haptic channel and test UI already exist.
 
 ## Controller identity
 
@@ -129,6 +150,12 @@ Config is stored at:
 %APPDATA%\Airbus3Joysticks\config.json
 ```
 
+Per-control rotary sensitivity is stored separately at:
+
+```text
+%APPDATA%\Airbus3Joysticks\rotary-sensitivity.json
+```
+
 Diagnostic archives are stored under:
 
 ```text
@@ -141,34 +168,58 @@ The rotary engine uses:
 
 - inner reset radius;
 - outer arm radius;
-- `atan2(-y, x)` angle;
-- wrap-safe angular delta;
+- wrap-safe `atan2(-y, x)` angular tracking;
 - accumulated angular travel;
-- discrete detents;
+- precision-first slow response and bounded fast response;
+- no queued/backlog turns after the user stops moving the stick;
 - reset on return to center.
 
-Default values:
+Default browser precision multipliers:
 
-- inner radius: `0.32`
-- outer radius: `0.58`
-- detent angle: `22.5°`
-- clockwise: increment
-- counter-clockwise: decrement
+- SPEED: `1.00x`
+- HEADING: `1.00x`
+- ALTITUDE: `1.35x`
+- V/S: `2.00x`
 
-Returning a stick to center resets angle tracking, preventing a jump when it is moved out again.
+A larger multiplier means more physical stick travel is required for one logical FCU change, so the control is slower and easier to set precisely. Each control can be tuned live from the dashboard and reset independently to the defaults above.
 
-## Focused validation tools
+## Aircraft-specific backend
+
+The current full-control backend targets **FlyByWire A32NX** and uses its published custom SimConnect event namespace.
+
+Production events include:
+
+- `A32NX.FCU_SPD_PUSH` / `A32NX.FCU_SPD_PULL`
+- `A32NX.FCU_HDG_PUSH` / `A32NX.FCU_HDG_PULL`
+- `A32NX.FCU_ALT_PUSH` / `A32NX.FCU_ALT_PULL`
+- `A32NX.FCU_VS_PUSH` / `A32NX.FCU_VS_PULL`
+- `A32NX.FCU_SPD_MACH_TOGGLE_PUSH`
+- `A32NX.FCU_TRK_FPA_TOGGLE_PUSH`
+- `A32NX.FCU_AP_1_PUSH` / `A32NX.FCU_AP_2_PUSH`
+- `A32NX.FCU_ATHR_PUSH`
+- `A32NX.FCU_LOC_PUSH`
+- `A32NX.FCU_APPR_PUSH`
+
+The runtime performs an aircraft-family check before dispatching these actions, and the SimConnect bridge performs a second defensive check before queueing any `A32NX.*` event.
+
+## Diagnostics
+
+Aircraft identity:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\aircraft-identify.ps1
+```
+
+FlyByWire button probe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\flybywire-button-probe.ps1
+```
 
 Full controller diagnostics:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics.ps1
-```
-
-FCU focused probe:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\fcu-probe.ps1
 ```
 
 PS4 rumble probe:
@@ -177,13 +228,7 @@ PS4 rumble probe:
 powershell -ExecutionPolicy Bypass -File .\scripts\rumble-probe.ps1
 ```
 
-Final V/S decrement probe:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\vs-dec-probe.ps1
-```
-
-See `docs/FCU_VALIDATION.md` for the measured FCU validation matrix.
+The older stock-Asobo probes are kept for diagnostics/history, but the normal production profile is FlyByWire A32NX.
 
 ## Architecture
 
@@ -198,6 +243,8 @@ SDL2 controller backend
 persistent role resolver
         |
         +--> button/combo router
+        |      |
+        |      +--> guarded FlyByWire A32NX events
         |
         +--> circular-stick rotary engine
         |          |
@@ -206,30 +253,29 @@ persistent role resolver
         |
         v
 SimConnect bridge thread
+  aircraft-family safety gate
   safe event queue + reconnect
   live FCU telemetry reads
         |
         v
-MSFS 2020 A320neo
+MSFS 2020 + FlyByWire A32NX
 
 FastAPI / WebSocket
   live dashboard
+  per-control rotary sensitivity
+  aircraft backend status
   haptics settings/tests
   binding editor
   health/preflight API
 ```
 
-## What remains after the core MVP
+## What remains after the flight-ready MVP
 
-The remaining work is mostly aircraft-specific rather than controller/runtime work:
-
-1. validate `AP_VS_VAR_DEC` with the focused probe;
-2. implement verified A320-specific FCU PUSH/PULL;
-3. implement AP1 / AP2 / A/THR and SPD/MACH / TRK-FPA through the verified aircraft backend;
-4. implement CENTER EFIS/RADIO actions when the third controller returns;
-5. connect real Master Warning / Master Caution / other warning data to the warning haptic channel;
-6. optional tray/autostart and standalone `.exe` packaging;
-7. optional rotary acceleration/per-control tuning after real flight use.
+1. connect FlyByWire Master Warning / Master Caution / selected warning data to the warning haptic channel;
+2. expose more managed/selected/AP/LOC/APPR state in the dashboard;
+3. implement CENTER EFIS/RADIO actions when the third controller returns;
+4. continue optional real-flight sensitivity tuning;
+5. add Windows tray/autostart and standalone `.exe` packaging.
 
 ## Development
 
