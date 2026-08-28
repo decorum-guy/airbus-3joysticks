@@ -29,6 +29,10 @@ def create_app(runtime: Runtime) -> FastAPI:
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/editor")
+    async def editor() -> FileResponse:
+        return FileResponse(STATIC_DIR / "editor.html")
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {"ok": True, "simconnect": runtime.bridge.state()}
