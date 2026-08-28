@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from ctypes import byref, c_float, c_uint8
 from datetime import datetime
 import json
 import os
 from pathlib import Path
 import platform
-import sys
 import time
 from typing import Any
 
@@ -232,10 +230,11 @@ def _reconnect_tests(
         print("  disconnect observed" if removed else "  WARNING: assigned key still present after disconnect")
 
         input("Reconnect the same controller, wait until Windows sees it, then press Enter...")
-        # Allow more than one scan interval without assuming exact OS enumeration latency.
-        for _ in range(8):
-            time.sleep(0.4)
-            backend.scan(force=True)
+        # Do not force-reopen every remaining controller: that could itself alter
+        # last-resort instance-ID identities and contaminate the reconnect test.
+        for _ in range(6):
+            time.sleep(1.05)
+            backend.scan()
             if len(backend.devices) >= len(unplug_keys) + 1:
                 break
 
