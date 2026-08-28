@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Airbus 3 Joysticks · Binding Editor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg:#071019; --panel:#0d1a25; --line:#294354; --text:#eaf2f7;
+      --muted:#8ea5b4; --cyan:#64d8ff; --green:#55d58b; --red:#ff7777; --amber:#f2be5c;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    header { position:sticky; top:0; z-index:3; padding:14px 20px; border-bottom:1px solid var(--line); background:rgba(7,16,25,.94); backdrop-filter:blur(12px); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    h1 { margin:0; font-size:18px; }
+    a { color:var(--cyan); text-decoration:none; }
+    main { max-width:1500px; margin:0 auto; padding:20px; }
+    .intro { color:var(--muted); margin-bottom:16px; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+    .card-head { padding:12px 14px; border-bottom:1px solid var(--line); }
+    .role { font-weight:800; letter-spacing:.03em; }
+    .device { margin-top:4px; color:var(--cyan); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .identity { margin-top:4px; color:var(--muted); font:11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; }
+    .body { padding:12px 14px 14px; }
+    textarea { width:100%; min-height:560px; resize:vertical; padding:10px; border:1px solid var(--line); border-radius:9px; background:#06121a; color:#dbe9f1; font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; tab-size:2; }
+    .footer { margin-top:9px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    button { border:1px solid #3b6077; border-radius:8px; background:#133047; color:var(--text); padding:8px 11px; font-weight:700; cursor:pointer; }
+    button:hover { background:#1a405b; }
+    button:disabled { opacity:.45; cursor:default; }
+    .status { min-height:20px; color:var(--muted); font-size:12px; }
+    .status.ok { color:var(--green); } .status.err { color:var(--red); } .status.warn { color:var(--amber); }
+    .top-status { display:flex; gap:8px; align-items:center; color:var(--muted); }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--red); }
+    .dot.ok { background:var(--green); }
+    code { color:#cbefff; }
+    @media (max-width:1100px) { .grid { grid-template-columns:1fr; } textarea { min-height:360px; } }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Binding Editor</h1>
+    <a href="/">← live controller map</a>
+  </div>
+  <div class="top-status"><span id="serverDot" class="dot"></span><span id="serverStatus">loading state…</span></div>
+</header>
+<main>
+  <div class="intro">
+    Each editor contains the persisted binding list for one physical role. Saving writes directly to
+    <code>%APPDATA%\Airbus3Joysticks\config.json</code>. An already-open live map receives the new labels on its next WebSocket state update.
+    Controls with action type <code>pending</code> remain intentionally non-operative.
+  </div>
+  <div id="grid" class="grid"></div>
+</main>
+<script>
+const ROLES = ['left','center','right'];
+let state = null;
+const drafts = new Map();
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function identity(role) {
+  const d = role.runtime_device || role.device;
+  if (!d) return 'not assigned';
+  if (d.serial) return `serial: ${d.serial}`;
+  if (d.path) return `serial unavailable · path: ${d.path}`;
+  return `serial/path unavailable · fallback: ${d.device_key || 'unknown'}`;
+}
+function card(roleKey, role) {
+  const name = role.runtime_device?.name || role.device?.name || 'No controller assigned';
+  const initial = JSON.stringify(role.bindings || [], null, 2);
+  drafts.set(roleKey, initial);
+  return `<section class="card">
+    <div class="card-head">
+      <div class="role">${escapeHtml(role.display_name)}</div>
+      <div class="device">${escapeHtml(name)}</div>
+      <div class="identity">${escapeHtml(identity(role))}</div>
+    </div>
+    <div class="body">
+      <textarea id="editor-${roleKey}" spellcheck="false" oninput="onEdit('${roleKey}')">${escapeHtml(initial)}</textarea>
+      <div class="footer">
+        <span id="status-${roleKey}" class="status">saved state loaded</span>
+        <div>
+          <button onclick="reloadRole('${roleKey}')">Reload</button>
+          <button id="save-${roleKey}" onclick="saveRole('${roleKey}')" disabled>Save</button>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+function onEdit(role) {
+  document.getElementById(`save-${role}`).disabled = false;
+  const status = document.getElementById(`status-${role}`);
+  status.className = 'status warn';
+  status.textContent = 'unsaved changes';
+}
+async function fetchState() {
+  const response = await fetch('/api/state', {cache:'no-store'});
+  if (!response.ok) throw new Error(`state HTTP ${response.status}`);
+  return response.json();
+}
+async function loadInitial() {
+  try {
+    state = await fetchState();
+    document.getElementById('serverDot').className = 'dot ok';
+    document.getElementById('serverStatus').textContent = state.simconnect?.connected ? 'server online · SimConnect connected' : 'server online · SimConnect offline';
+    document.getElementById('grid').innerHTML = ROLES.map(r => card(r, state.roles[r])).join('');
+  } catch (e) {
+    document.getElementById('serverStatus').textContent = `failed to load: ${e.message}`;
+  }
+}
+async function reloadRole(roleKey) {
+  const status = document.getElementById(`status-${roleKey}`);
+  try {
+    const fresh = await fetchState();
+    const value = JSON.stringify(fresh.roles[roleKey].bindings || [], null, 2);
+    document.getElementById(`editor-${roleKey}`).value = value;
+    document.getElementById(`save-${roleKey}`).disabled = true;
+    status.className = 'status ok';
+    status.textContent = 'reloaded from persisted config';
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = e.message;
+  }
+}
+async function saveRole(roleKey) {
+  const editor = document.getElementById(`editor-${roleKey}`);
+  const status = document.getElementById(`status-${roleKey}`);
+  const button = document.getElementById(`save-${roleKey}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(editor.value);
+    if (!Array.isArray(parsed)) throw new Error('top level must be a JSON array');
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = `invalid JSON: ${e.message}`;
+    return;
+  }
+
+  button.disabled = true;
+  status.className = 'status';
+  status.textContent = 'saving…';
+  try {
+    const response = await fetch(`/api/bindings/${roleKey}`, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(parsed)
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    editor.value = JSON.stringify(body.bindings, null, 2);
+    status.className = 'status ok';
+    status.textContent = 'saved · live map updated';
+  } catch (e) {
+    button.disabled = false;
+    status.className = 'status err';
+    status.textContent = `save failed: ${e.message}`;
+  }
+}
+loadInitial();
+</script>
+</body>
+</html>
