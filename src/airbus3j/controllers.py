@@ -36,6 +36,20 @@ BUTTONS = {
     "dpad_right": sdl2.SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
 }
 
+# SDL added several standardized buttons after the original game-controller API.
+# Add them when the packaged SDL/PySDL2 exposes them. This is especially useful
+# for PlayStation touchpad-click detection without making older SDL builds fail.
+for _name, _symbol in (
+    ("misc1", "SDL_CONTROLLER_BUTTON_MISC1"),
+    ("paddle1", "SDL_CONTROLLER_BUTTON_PADDLE1"),
+    ("paddle2", "SDL_CONTROLLER_BUTTON_PADDLE2"),
+    ("paddle3", "SDL_CONTROLLER_BUTTON_PADDLE3"),
+    ("paddle4", "SDL_CONTROLLER_BUTTON_PADDLE4"),
+    ("touchpad", "SDL_CONTROLLER_BUTTON_TOUCHPAD"),
+):
+    if hasattr(sdl2, _symbol):
+        BUTTONS[_name] = getattr(sdl2, _symbol)
+
 
 def _decode(value: bytes | None) -> str | None:
     if not value:
