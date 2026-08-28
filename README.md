@@ -2,7 +2,7 @@
 
 Turn three ordinary gamepads into a compact Airbus A320neo home-cockpit controller for Microsoft Flight Simulator 2020.
 
-> Status: early MVP. The controller engine, persistent device roles, rotary-stick logic, local-network web panel, editable bindings and a standard SimConnect event bridge are being built first. Airbus-specific FCU push/pull and EFIS actions that need gauge/WASM access are intentionally isolated behind an action backend and are the next implementation step.
+> Status: early MVP. The controller engine, persistent device roles, rotary-stick logic, local-network web panel, editable bindings and a standard SimConnect event bridge are implemented as the first baseline. Airbus-specific FCU push/pull and EFIS actions that need gauge/WASM access are intentionally isolated behind an action backend and are the next implementation step.
 
 ## Goal
 
@@ -14,7 +14,7 @@ Typical layout:
 - **CENTER (Xbox-style):** BARO, EFIS, radio/utility controls.
 - **RIGHT (DualSense):** FCU ALTITUDE + V/S, flaps, spoilers, autobrake.
 
-The visual panel is served from the Windows PC so a MacBook/iPad/phone on the same LAN can show the current assignments. Changes made in the app are pushed to the page live over WebSocket; no page reload is required.
+The visual panel is served from the Windows PC so a MacBook/iPad/phone on the same LAN can show the current assignments. Changes saved in the binding editor are pushed to an already-open live map over WebSocket; no page reload is required.
 
 ## MVP architecture
 
@@ -35,7 +35,8 @@ DualSense RIGHT ─┘        │
                            └─> FastAPI local web server
                                   ├─ REST config API
                                   ├─ WebSocket live state
-                                  └─ SVG/CSS controller map
+                                  ├─ live controller map
+                                  └─ persistent binding editor
 ```
 
 ### Why SDL2
@@ -95,16 +96,22 @@ The terminal prints two addresses:
 
 Open the LAN address on the MacBook. Windows Firewall may ask whether Python may accept connections; allow it on **Private networks** if you want the MacBook page to work.
 
+Useful pages:
+
+- `http://<windows-ip>:8765/` — clean live controller map for the MacBook/iPad/phone;
+- `http://<windows-ip>:8765/editor` — persistent JSON binding editor.
+
 The web UI has no authentication in the MVP. Run it only on a trusted private LAN.
 
 ## First-run workflow
 
-1. Open the web panel.
-2. Click **Assign** on LEFT.
+1. Open the live web panel.
+2. Click **Assign controller** on LEFT.
 3. Press any normal button on the physical controller that is physically on the left.
 4. Repeat for CENTER and RIGHT.
 5. The role mapping is saved under `%APPDATA%\Airbus3Joysticks\config.json`.
 6. Restarting the app reuses the saved identities.
+7. Open `/editor` when you want to change the binding JSON. Saving there updates the live map automatically.
 
 If two identical controllers expose real serial numbers, those serials are used. If they do not, SDL device paths are used. If Windows changes a fallback path after reconnecting hardware, re-assignment may be required; the UI will show that the saved device is missing instead of silently assigning the wrong controller.
 
@@ -144,6 +151,7 @@ Default FCU mapping:
 - REST state/config endpoints.
 - WebSocket live updates.
 - Browser controller map rendered as a live diagram.
+- Separate persistent binding editor at `/editor`.
 - Standard SimConnect action queue with automatic reconnect attempts.
 - Safe `noop`/pending actions for controls whose exact A320neo implementation has not yet been verified.
 
@@ -162,6 +170,8 @@ The starter profile intentionally uses standard documented events for the first 
 - `SPOILERS_ARM_TOGGLE`
 - `AUTOBRAKE_LO_SET` / `AUTOBRAKE_MED_SET`
 
+`COM_STBY_RADIO_SWAP` is also used for the CENTER right-stick click. Its standard MSFS 2020 event is documented, but the full one-stick 8.33 kHz COM rotary policy is still pending.
+
 Exact A320neo FCU managed/selected PUSH/PULL semantics are deliberately **not guessed** in the starter profile.
 
 ## Project layout
@@ -175,7 +185,8 @@ src/airbus3j/
   runtime.py           role mapping, button/combo + rotary routing
   simconnect_bridge.py reconnecting SimConnect worker
   web.py               FastAPI/WebSocket API
-  static/index.html    live visual controller panel + editor
+  static/index.html    live visual controller map
+  static/editor.html   persistent binding editor
 scripts/
   setup.ps1
   run.ps1
@@ -214,13 +225,15 @@ Examples:
 
 ## Local network panel
 
-The server binds to `0.0.0.0:8765` by default so another device on the LAN can open it. The page subscribes to `/ws` and receives state broadcasts when:
+The server binds to `0.0.0.0:8765` by default so another device on the LAN can open it. The live map subscribes to `/ws` and receives fresh runtime state continuously, including changes to:
 
-- a controller connects/disconnects;
-- a role is assigned;
-- a binding is edited;
-- SimConnect connects/disconnects;
-- the active input changes.
+- controller connection state;
+- role assignments;
+- binding labels/actions;
+- SimConnect connectivity;
+- the last triggered input/action.
+
+The editor writes binding changes through the REST API and persists them immediately. The live map does not need to be reloaded after a save.
 
 ## Next milestones
 
