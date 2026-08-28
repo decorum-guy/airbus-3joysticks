@@ -5,6 +5,9 @@ import math
 import time
 
 
+ANGLE_EPSILON_DEGREES = 1e-6
+
+
 @dataclass
 class RotaryState:
     armed: bool = False
@@ -174,12 +177,15 @@ class RotaryEngine:
         state.accumulated_degrees += clockwise_degrees
 
         raw_detents = 0
-        while state.accumulated_degrees >= threshold:
+        while state.accumulated_degrees + ANGLE_EPSILON_DEGREES >= threshold:
             raw_detents += 1
             state.accumulated_degrees -= threshold
-        while state.accumulated_degrees <= -threshold:
+        while state.accumulated_degrees - ANGLE_EPSILON_DEGREES <= -threshold:
             raw_detents -= 1
             state.accumulated_degrees += threshold
+
+        if abs(state.accumulated_degrees) < ANGLE_EPSILON_DEGREES:
+            state.accumulated_degrees = 0.0
 
         if raw_detents == 0:
             return 0
