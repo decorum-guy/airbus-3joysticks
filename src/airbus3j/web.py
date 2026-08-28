@@ -36,7 +36,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         finally:
             await runtime.stop()
 
-    app = FastAPI(title="Airbus 3 Joysticks", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Airbus 3 Joysticks", version="0.4.0", lifespan=lifespan)
 
     @app.get("/")
     async def index() -> HTMLResponse:
@@ -47,7 +47,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         )
         html = html.replace(
             "</body>",
-            '<script src="/rotary-controls.js"></script></body>',
+            '<script src="/rotary-controls.js"></script><script src="/backend-status.js"></script></body>',
         )
         return HTMLResponse(html)
 
@@ -58,6 +58,10 @@ def create_app(runtime: Runtime) -> FastAPI:
     @app.get("/rotary-controls.js")
     async def rotary_controls_js() -> FileResponse:
         return FileResponse(STATIC_DIR / "rotary-controls.js", media_type="text/javascript")
+
+    @app.get("/backend-status.js")
+    async def backend_status_js() -> FileResponse:
+        return FileResponse(STATIC_DIR / "backend-status.js", media_type="text/javascript")
 
     @app.get("/editor")
     async def editor() -> FileResponse:
