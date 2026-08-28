@@ -37,17 +37,17 @@ def create_app(runtime: Runtime) -> FastAPI:
     async def state() -> dict[str, Any]:
         return runtime.public_state()
 
+    @app.post("/api/assign/cancel")
+    async def cancel_assignment() -> dict[str, Any]:
+        runtime.cancel_assignment()
+        return {"ok": True}
+
     @app.post("/api/assign/{role}")
     async def assign(role: str) -> dict[str, Any]:
         if role not in ROLES:
             raise HTTPException(status_code=404, detail="Unknown role")
         runtime.arm_assignment(role)
         return {"ok": True, "assignment_target": role}
-
-    @app.post("/api/assign/cancel")
-    async def cancel_assignment() -> dict[str, Any]:
-        runtime.cancel_assignment()
-        return {"ok": True}
 
     @app.delete("/api/assign/{role}")
     async def clear_assignment(role: str) -> dict[str, Any]:
