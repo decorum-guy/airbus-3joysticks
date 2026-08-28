@@ -37,9 +37,17 @@ def test_middle_hysteresis_zone_does_not_arm_from_center():
     assert r.update("pad", "left", 0.60, 0.0) == 0
 
 
-def test_angle_wrap_does_not_create_full_circle_jump():
-    # Start just above the negative X axis, then cross the +/- pi boundary.
+def test_angle_wrap_ccw_does_not_create_full_circle_jump():
+    # On screen coordinates, upper-left -> lower-left along the left edge is
+    # counter-clockwise. Crossing +/-pi must remain a small ~20-degree move.
     r = engine(detent=5.0)
-    r.update("pad", "left", -0.985, -0.174)  # physical ~170 degrees CCW from right
+    r.update("pad", "left", -0.985, -0.174)
     detents = r.update("pad", "left", -0.985, 0.174)
+    assert -10 < detents < 0
+
+
+def test_angle_wrap_clockwise_does_not_create_full_circle_jump():
+    r = engine(detent=5.0)
+    r.update("pad", "left", -0.985, 0.174)
+    detents = r.update("pad", "left", -0.985, -0.174)
     assert 0 < detents < 10
