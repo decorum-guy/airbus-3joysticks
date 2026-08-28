@@ -1,57 +1,46 @@
 # Airbus 3 Joysticks
 
-Turn three ordinary gamepads into a compact Airbus A320neo home-cockpit controller for Microsoft Flight Simulator 2020.
+Turn ordinary gamepads into a compact Airbus A320neo home-cockpit control panel for Microsoft Flight Simulator 2020.
 
-> Status: early MVP. The controller engine, persistent device roles, rotary-stick logic, local-network web panel, editable bindings and a standard SimConnect event bridge are implemented as the first baseline. Airbus-specific FCU push/pull and EFIS actions that need gauge/WASM access are intentionally isolated behind an action backend and are the next implementation step.
+## Current status
 
-## Goal
+The project is now a **two-controller flight-usable MVP**. LEFT and RIGHT are active by default; the complete CENTER / EFIS / RADIO profile remains preserved behind a feature flag until a third controller is available.
 
-Three physical controllers are placed **LEFT / CENTER / RIGHT**. The app remembers which physical device owns each role, reads their controls, converts circular stick motion into virtual rotary encoder detents, sends simulator actions to MSFS 2020, and serves a live visual control map over the local network.
+Validated on the tested MSFS 2020 A320neo setup:
 
-Typical layout:
+- persistent LEFT / RIGHT identity by hardware serial;
+- circular thumbstick motion -> virtual rotary detents;
+- SPEED increment/decrement;
+- HEADING increment/decrement;
+- ALTITUDE increment/decrement;
+- V/S increment (decrement has one final focused validation probe);
+- SimConnect reconnecting event bridge;
+- live FCU telemetry in the browser;
+- Bluetooth PS4-compatible rumble using SDL GameController with extended reports;
+- separate haptic intensity for rotary detents and warning cues;
+- live LAN dashboard with stick position, pressed buttons, device status and readiness.
 
-- **LEFT (DualSense):** FCU SPEED + HEADING, AP controls.
-- **CENTER (Xbox-style):** BARO, EFIS, radio/utility controls.
-- **RIGHT (DualSense):** FCU ALTITUDE + V/S, flaps, spoilers, autobrake.
+Exact Airbus-specific FCU PUSH/PULL, AP1/AP2, A/THR, SPD/MACH, TRK/FPA and some EFIS functions are intentionally still `pending` until their aircraft-specific backend is verified. The app never substitutes a plausible-but-wrong generic event for these controls.
 
-The visual panel is served from the Windows PC so a MacBook/iPad/phone on the same LAN can show the current assignments. Changes saved in the binding editor are pushed to an already-open live map over WebSocket; no page reload is required.
+## Physical layout
 
-## MVP architecture
+### LEFT · FCU SPD / HDG
 
-```text
-DualSense LEFT  ─┐
-Xbox CENTER     ─┼─> SDL2 input + identity
-DualSense RIGHT ─┘        │
-                           ├─> persistent LEFT/CENTER/RIGHT roles
-                           │
-                           ├─> button/combo engine
-                           ├─> circular-stick rotary engine
-                           │      dead-zone + angle unwrap + detents
-                           │
-                           ├─> action router
-                           │      ├─ standard SimConnect events
-                           │      └─ MobiFlight/WASM backend (next)
-                           │
-                           └─> FastAPI local web server
-                                  ├─ REST config API
-                                  ├─ WebSocket live state
-                                  ├─ live controller map
-                                  └─ persistent binding editor
-```
+- left stick circular rotation -> SPEED
+- right stick circular rotation -> HEADING
+- stick clicks and L1+stick clicks are reserved for exact Airbus PUSH/PULL
+- face/D-pad buttons contain AP/LOC/APPR and pending Airbus-specific functions
 
-### Why SDL2
+### RIGHT · FCU ALT / V/S
 
-SDL2 exposes a game-controller abstraction as well as joystick serial numbers and implementation-dependent device paths on supported drivers. We persist identity in this order:
+- left stick circular rotation -> ALTITUDE
+- right stick circular rotation -> V/S
+- D-pad -> flaps / speedbrake
+- face buttons -> spoiler arm / autobrake functions
 
-1. hardware serial, when SDL/driver exposes it;
-2. SDL device path;
-3. GUID + VID/PID/name fallback.
+### CENTER · EFIS / RADIO
 
-A fallback identifier is **not** treated or displayed as a real hardware serial.
-
-### Why a web panel instead of generating a PNG every time
-
-The panel is a live browser view. It is effectively the requested "picture with labels", but the labels can update instantly. It also scales correctly on a MacBook/iPad without regenerating image files. Static PNG/SVG export can be added later.
+The full profile is kept in config but is disabled by default. It can be enabled later without redistributing its functions onto LEFT or RIGHT.
 
 ## Install on Windows
 
@@ -59,193 +48,188 @@ Requirements:
 
 - Windows 10/11 x64
 - Microsoft Flight Simulator 2020
-- Python **3.12 x64** recommended
-- the three controllers connected before first assignment
+- Python 3.12 x64 recommended
+- two currently active controllers connected
 
-You **do not need the MSFS SDK** for the standard SimConnect MVP. `pysimconnect` ships a compatible SimConnect client DLL.
-
-MobiFlight is **not required for the first rotary test**. It will be required for the Airbus-specific controls that cannot be expressed reliably as standard SimConnect key events (notably exact FCU push/pull and some EFIS/input-event actions).
-
-### 1. Clone
+Clone the repository:
 
 ```powershell
 git clone https://github.com/decorum-guy/airbus-3joysticks.git
 cd airbus-3joysticks
 ```
 
-### 2. Bootstrap
+Then simply run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1
 ```
 
-This creates `.venv` and installs the Python dependencies.
+`run.ps1` is self-bootstrapping: if `.venv` does not exist, it runs `scripts/setup.ps1` automatically.
 
-### 3. Run
+## Normal flight workflow
 
-Start MSFS 2020 (a flight may already be loaded), then:
+1. Start MSFS 2020 and load the tested A320neo into the cockpit.
+2. Connect the LEFT and RIGHT controllers.
+3. Run `scripts/run.ps1`.
+4. Open the dashboard printed in the terminal.
+5. Wait for **READY TO FLY**.
+6. Rotate the sticks around their outer circle to change FCU targets.
 
-```powershell
-.\scripts\run.ps1
-```
+The service deliberately drops control events while SimConnect is offline rather than replaying stale knob turns after reconnect.
 
-The terminal prints two addresses:
+## Browser pages
 
-- local: `http://127.0.0.1:8765`
-- LAN: `http://<windows-ip>:8765`
+The service binds to `0.0.0.0:8765` by default.
 
-Open the LAN address on the MacBook. Windows Firewall may ask whether Python may accept connections; allow it on **Private networks** if you want the MacBook page to work.
+- `/` — live cockpit dashboard
+- `/haptics` — detent/warning rumble intensity and test controls
+- `/editor` — persistent binding editor
+- `/api/preflight` — machine-readable readiness state
+- `/health` — service health + readiness
 
-Useful pages:
+The dashboard shows:
 
-- `http://<windows-ip>:8765/` — clean live controller map for the MacBook/iPad/phone;
-- `http://<windows-ip>:8765/editor` — persistent JSON binding editor.
+- current SimConnect connection and aircraft title;
+- live selected SPD / HDG / ALT / V/S telemetry;
+- LEFT/RIGHT online state and serial identity;
+- live thumbstick position/radius/angle;
+- pressed buttons;
+- current binding labels and pending markers;
+- last dispatched action;
+- detected SDL devices.
 
-The web UI has no authentication in the MVP. Run it only on a trusted private LAN.
+The web UI has no authentication. Use LAN access only on a trusted private network.
 
-## First-run workflow
+## Haptics
 
-1. Open the live web panel.
-2. Click **Assign controller** on LEFT.
-3. Press any normal button on the physical controller that is physically on the left.
-4. Repeat for CENTER and RIGHT.
-5. The role mapping is saved under `%APPDATA%\Airbus3Joysticks\config.json`.
-6. Restarting the app reuses the saved identities.
-7. Open `/editor` when you want to change the binding JSON. Saving there updates the live map automatically.
+The tested PS4-compatible controllers expose two rumble motors through SDL when PS4 Bluetooth extended reports are enabled.
 
-If two identical controllers expose real serial numbers, those serials are used. If they do not, SDL device paths are used. If Windows changes a fallback path after reconnecting hardware, re-assignment may be required; the UI will show that the saved device is missing instead of silently assigning the wrong controller.
+The project uses physically different profiles:
 
-## Circular stick = rotary encoder
+- **Changing values** — short, crisp pulse dominated by the high-frequency motor;
+- **Warnings** — heavier pulse dominated by the low-frequency motor.
 
-A rotary stick is armed only after its radius passes the configured outer dead-zone. The first angle becomes the reference point. While the stick stays outside the active radius, the engine unwraps `atan2(y, x)` across the 0/360-degree boundary and accumulates angular travel.
+Overall strength remains independently adjustable for both channels at `/haptics`.
 
-Every configured angular step emits one virtual detent. Returning the stick to the inner dead-zone resets tracking, so returning to center cannot generate a giant accidental change.
+Real aircraft warning signals (Master Warning / Master Caution / stall cue, etc.) are a later aircraft-data integration layer; the warning haptic channel and test UI already exist.
 
-Default direction:
+## Controller identity
 
-- clockwise = increment
-- counter-clockwise = decrement
+Identity preference:
 
-Default FCU mapping:
+1. hardware serial;
+2. SDL device path;
+3. GUID + VID/PID/name fallback.
 
-| Position | Stick | Function |
-|---|---|---|
-| LEFT | left | SPEED |
-| LEFT | right | HEADING |
-| RIGHT | left | ALTITUDE |
-| RIGHT | right | V/S |
-| CENTER | left | BARO |
-| CENTER | right | COM/utility (Airbus-specific backend pending) |
+The two currently tested controllers expose distinct stable serials and survived disconnect/reconnect identity testing. A fallback identifier is never presented as if it were a real hardware serial.
 
-## What is working in the first code baseline
-
-- SDL2 controller discovery.
-- Best-effort hardware serial and device-path identity.
-- Persistent LEFT/CENTER/RIGHT assignment.
-- Press-a-button device assignment mode.
-- Standard game-controller buttons/axes.
-- Circular-stick rotary detector with inner/outer dead-zones and angle unwrapping.
-- Optional short rumble tick on rotary detents.
-- Config persisted in `%APPDATA%\Airbus3Joysticks`.
-- FastAPI web server on port 8765.
-- REST state/config endpoints.
-- WebSocket live updates.
-- Browser controller map rendered as a live diagram.
-- Separate persistent binding editor at `/editor`.
-- Standard SimConnect action queue with automatic reconnect attempts.
-- Safe `noop`/pending actions for controls whose exact A320neo implementation has not yet been verified.
-
-## Standard MSFS events used by the starter profile
-
-The starter profile intentionally uses standard documented events for the first hardware test, including:
-
-- `AP_SPD_VAR_INC` / `AP_SPD_VAR_DEC`
-- `HEADING_BUG_INC` / `HEADING_BUG_DEC`
-- `AP_ALT_VAR_INC` / `AP_ALT_VAR_DEC`
-- `AP_VS_VAR_INC` / `AP_VS_VAR_DEC`
-- `KOHLSMAN_INC` / `KOHLSMAN_DEC`
-- `BAROMETRIC_STD_PRESSURE`
-- `FLAPS_INCR` / `FLAPS_DECR`
-- `SPOILERS_INC` / `SPOILERS_DEC`
-- `SPOILERS_ARM_TOGGLE`
-- `AUTOBRAKE_LO_SET` / `AUTOBRAKE_MED_SET`
-
-`COM_STBY_RADIO_SWAP` is also used for the CENTER right-stick click. Its standard MSFS 2020 event is documented, but the full one-stick 8.33 kHz COM rotary policy is still pending.
-
-Exact A320neo FCU managed/selected PUSH/PULL semantics are deliberately **not guessed** in the starter profile.
-
-## Project layout
+Config is stored at:
 
 ```text
-src/airbus3j/
-  app.py               process orchestration
-  config.py            persistent config + default profile
-  controllers.py       SDL2 discovery, identity and input snapshots
-  rotary.py            circular-stick detector
-  runtime.py           role mapping, button/combo + rotary routing
-  simconnect_bridge.py reconnecting SimConnect worker
-  web.py               FastAPI/WebSocket API
-  static/index.html    live visual controller map
-  static/editor.html   persistent binding editor
-scripts/
-  setup.ps1
-  run.ps1
-docs/
-  ARCHITECTURE.md
-  CODER_PROMPT.md
+%APPDATA%\Airbus3Joysticks\config.json
 ```
 
-## Binding model
+Diagnostic archives are stored under:
 
-A binding contains a human label and an action. This separation matters: the web panel can be useful even for actions that are not implemented yet.
-
-Examples:
-
-```json
-{
-  "trigger": "rotary:left",
-  "label": "FCU SPEED",
-  "clockwise": {"type": "sim_event", "event": "AP_SPD_VAR_INC"},
-  "counter_clockwise": {"type": "sim_event", "event": "AP_SPD_VAR_DEC"}
-}
+```text
+%APPDATA%\Airbus3Joysticks\diagnostics\
 ```
 
-```json
-{
-  "trigger": "leftshoulder+leftstick",
-  "label": "SPD PULL",
-  "action": {
-    "type": "pending",
-    "reason": "Requires verified A320neo selected-speed action"
-  }
-}
+## Circular stick rotary model
+
+The rotary engine uses:
+
+- inner reset radius;
+- outer arm radius;
+- `atan2(-y, x)` angle;
+- wrap-safe angular delta;
+- accumulated angular travel;
+- discrete detents;
+- reset on return to center.
+
+Default values:
+
+- inner radius: `0.32`
+- outer radius: `0.58`
+- detent angle: `22.5°`
+- clockwise: increment
+- counter-clockwise: decrement
+
+Returning a stick to center resets angle tracking, preventing a jump when it is moved out again.
+
+## Focused validation tools
+
+Full controller diagnostics:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics.ps1
 ```
 
-`pending` is intentional: a visible unimplemented binding is safer than sending a plausible-but-wrong flight-control event.
+FCU focused probe:
 
-## Local network panel
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\fcu-probe.ps1
+```
 
-The server binds to `0.0.0.0:8765` by default so another device on the LAN can open it. The live map subscribes to `/ws` and receives fresh runtime state continuously, including changes to:
+PS4 rumble probe:
 
-- controller connection state;
-- role assignments;
-- binding labels/actions;
-- SimConnect connectivity;
-- the last triggered input/action.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\rumble-probe.ps1
+```
 
-The editor writes binding changes through the REST API and persists them immediately. The live map does not need to be reloaded after a save.
+Final V/S decrement probe:
 
-## Next milestones
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\vs-dec-probe.ps1
+```
 
-1. Verify the starter profile against the exact MSFS 2020 stock A320neo version.
-2. Implement MobiFlight WASM client-data transport as a second action backend.
-3. Replace pending FCU PUSH/PULL with verified A320neo input events/RPN.
-4. Add EFIS ND range/mode/filter actions.
-5. Add DualSense touchpad gestures.
-6. Improve rotary acceleration and per-control tuning.
-7. Add tray app + optional Windows auto-start.
-8. Package a standalone `.exe` so Python is no longer required.
-9. Optional SVG/PNG snapshot endpoint for a literal generated control-map image.
+See `docs/FCU_VALIDATION.md` for the measured FCU validation matrix.
+
+## Architecture
+
+```text
+LEFT / RIGHT gamepads
+        |
+        v
+SDL2 controller backend
+  identity + axes + buttons + rumble
+        |
+        v
+persistent role resolver
+        |
+        +--> button/combo router
+        |
+        +--> circular-stick rotary engine
+        |          |
+        |          v
+        |      detent haptics
+        |
+        v
+SimConnect bridge thread
+  safe event queue + reconnect
+  live FCU telemetry reads
+        |
+        v
+MSFS 2020 A320neo
+
+FastAPI / WebSocket
+  live dashboard
+  haptics settings/tests
+  binding editor
+  health/preflight API
+```
+
+## What remains after the core MVP
+
+The remaining work is mostly aircraft-specific rather than controller/runtime work:
+
+1. validate `AP_VS_VAR_DEC` with the focused probe;
+2. implement verified A320-specific FCU PUSH/PULL;
+3. implement AP1 / AP2 / A/THR and SPD/MACH / TRK-FPA through the verified aircraft backend;
+4. implement CENTER EFIS/RADIO actions when the third controller returns;
+5. connect real Master Warning / Master Caution / other warning data to the warning haptic channel;
+6. optional tray/autostart and standalone `.exe` packaging;
+7. optional rotary acceleration/per-control tuning after real flight use.
 
 ## Development
 
@@ -254,4 +238,4 @@ The editor writes binding changes through the REST API and persists them immedia
 .\.venv\Scripts\python.exe -m airbus3j
 ```
 
-See `docs/ARCHITECTURE.md` and `docs/CODER_PROMPT.md` for the implementation contract and the next coding-agent task.
+CI runs on both Windows and Ubuntu for every pull request and on pushes to `main`.
