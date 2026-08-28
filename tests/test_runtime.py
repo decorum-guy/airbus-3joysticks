@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from airbus3j.config import ConfigStore
-from airbus3j.runtime import Runtime
+from airbus3j.runtime import Runtime, enabled_roles
 
 
 class FakeBridge:
@@ -40,6 +40,47 @@ def make_snapshot(**pressed):
     }
 
 
+def test_default_active_roles_are_left_and_right(tmp_path: Path):
+    store = ConfigStore(tmp_path / "config.json")
+    cfg = store.snapshot()
+    assert cfg["features"]["center_controller_enabled"] is False
+    assert enabled_roles(cfg) == ("left", "right")
+
+
+def test_center_role_can_be_enabled_without_losing_profile(tmp_path: Path):
+    store = ConfigStore(tmp_path / "config.json")
+    cfg = store.snapshot()
+    cfg["features"]["center_controller_enabled"] = True
+    assert enabled_roles(cfg) == ("left", "center", "right")
+    assert cfg["bindings"]["center"]
+
+
+def test_disabled_center_is_not_resolved_to_a_device(tmp_path: Path):
+    store = ConfigStore(tmp_path / "config.json")
+    store.assign_device("center", {
+        "device_key": "center-pad",
+        "name": "Center Pad",
+        "serial": "CENTER",
+        "path": None,
+        "guid": "g",
+        "vendor_id": 1,
+        "product_id": 2,
+    })
+    runtime = RecordingRuntime(store)
+    snapshots = {
+        "center-pad": {"identity": {
+            "device_key": "center-pad",
+            "name": "Center Pad",
+            "serial": "CENTER",
+            "path": None,
+            "guid": "g",
+            "vendor_id": 1,
+            "product_id": 2,
+        }}
+    }
+    assert runtime._role_devices(snapshots)["center"] is None
+
+
 def test_combo_precedence_does_not_also_fire_base_button(tmp_path: Path):
     store = ConfigStore(tmp_path / "config.json")
     runtime = RecordingRuntime(store)
@@ -47,14 +88,7 @@ def test_combo_precedence_does_not_also_fire_base_button(tmp_path: Path):
         {"trigger": "leftstick", "label": "base", "action": {"type": "noop"}},
         {"trigger": "leftshoulder+leftstick", "label": "combo", "action": {"type": "noop"}},
     ]
-
-    runtime._route_buttons(
-        "left",
-        "pad",
-        make_snapshot(leftshoulder=True, leftstick=True),
-        bindings,
-    )
-
+    runtime._route_buttons("left", "pad", make_snapshot(leftshoulder=True, leftstick=True), bindings)
     triggers = [entry[1] for entry in runtime.dispatched]
     assert triggers == ["leftshoulder+leftstick"]
 
@@ -62,14 +96,7 @@ def test_combo_precedence_does_not_also_fire_base_button(tmp_path: Path):
 def test_pending_action_never_emits_simconnect_event(tmp_path: Path):
     store = ConfigStore(tmp_path / "config.json")
     runtime = RecordingRuntime(store)
-
-    result = runtime._dispatch_action(
-        "left",
-        "leftstick",
-        "SPD PUSH",
-        {"type": "pending", "reason": "not verified"},
-    )
-
+    result = runtime._dispatch_action("left", "leftstick", "SPD PUSH", {"type": "pending", "reason": "not verified"})
     assert result.startswith("pending:")
     assert runtime.bridge.events == []
 
@@ -77,14 +104,7 @@ def test_pending_action_never_emits_simconnect_event(tmp_path: Path):
 def test_sim_event_is_forwarded_to_bridge(tmp_path: Path):
     store = ConfigStore(tmp_path / "config.json")
     runtime = RecordingRuntime(store)
-
-    result = runtime._dispatch_action(
-        "right",
-        "dpad_down",
-        "FLAPS DOWN",
-        {"type": "sim_event", "event": "FLAPS_INCR"},
-    )
-
+    result = runtime._dispatch_action("right", "dpad_down", "FLAPS DOWN", {"type": "sim_event", "event": "FLAPS_INCR"})
     assert result == "sent"
     assert runtime.bridge.events == [("FLAPS_INCR", None)]
 
@@ -93,61 +113,38 @@ def test_ambiguous_identical_fallback_is_not_silently_selected(tmp_path: Path):
     store = ConfigStore(tmp_path / "config.json")
     runtime = RecordingRuntime(store)
     saved = {
-        "device_key": "old-fallback-key",
-        "name": "Wireless Controller",
-        "serial": None,
-        "path": None,
-        "guid": "same-guid",
-        "vendor_id": 1356,
-        "product_id": 3302,
+        "device_key": "old-fallback-key", "name": "Wireless Controller", "serial": None,
+        "path": None, "guid": "same-guid", "vendor_id": 1356, "product_id": 3302,
     }
     snapshots = {
         "pad-a": {"identity": {**saved, "device_key": "pad-a"}},
         "pad-b": {"identity": {**saved, "device_key": "pad-b"}},
     }
-
-    match = runtime._find_device_for_saved_identity(saved, snapshots, already_used=set())
-    assert match is None
+    assert runtime._find_device_for_saved_identity(saved, snapshots, already_used=set()) is None
 
 
 def test_unique_fallback_can_be_recovered(tmp_path: Path):
     store = ConfigStore(tmp_path / "config.json")
     runtime = RecordingRuntime(store)
     saved = {
-        "device_key": "old-fallback-key",
-        "name": "Xbox Controller",
-        "serial": None,
-        "path": None,
-        "guid": "xbox-guid",
-        "vendor_id": 1118,
-        "product_id": 654,
+        "device_key": "old-fallback-key", "name": "Xbox Controller", "serial": None,
+        "path": None, "guid": "xbox-guid", "vendor_id": 1118, "product_id": 654,
     }
-    snapshots = {
-        "new-key": {"identity": {**saved, "device_key": "new-key"}},
-    }
-
-    match = runtime._find_device_for_saved_identity(saved, snapshots, already_used=set())
-    assert match == "new-key"
+    snapshots = {"new-key": {"identity": {**saved, "device_key": "new-key"}}}
+    assert runtime._find_device_for_saved_identity(saved, snapshots, already_used=set()) == "new-key"
 
 
 def test_config_role_assignment_and_binding_edit_survive_reload(tmp_path: Path):
     path = tmp_path / "config.json"
     store = ConfigStore(path)
     identity = {
-        "device_key": "serial:abc",
-        "name": "DualSense",
-        "serial": "REAL-SERIAL",
-        "path": None,
-        "guid": "guid",
-        "vendor_id": 1,
-        "product_id": 2,
+        "device_key": "serial:abc", "name": "DualSense", "serial": "REAL-SERIAL",
+        "path": None, "guid": "guid", "vendor_id": 1, "product_id": 2,
         "identity_source": "serial",
     }
     edited = [{"trigger": "a", "label": "TEST", "action": {"type": "noop"}}]
-
     store.assign_device("left", identity)
     store.replace_bindings("left", edited)
-
     reloaded = ConfigStore(path).snapshot()
     assert reloaded["roles"]["left"]["device"] == identity
     assert reloaded["bindings"]["left"] == edited
