@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import math
 import time
 from typing import Any
 
@@ -17,6 +18,17 @@ ROLES = ("left", "center", "right")
 def enabled_roles(cfg: dict[str, Any]) -> tuple[str, ...]:
     center_enabled = bool(cfg.get("features", {}).get("center_controller_enabled", False))
     return tuple(role for role in ROLES if role != "center" or center_enabled)
+
+
+def _stick_live(axes: dict[str, Any], stick: str) -> dict[str, float]:
+    x = float(axes.get(f"{stick}_x", 0.0))
+    y = float(axes.get(f"{stick}_y", 0.0))
+    return {
+        "x": x,
+        "y": y,
+        "radius": min(1.5, math.hypot(x, y)),
+        "angle_degrees": math.degrees(math.atan2(-y, x)),
+    }
 
 
 class Runtime:
@@ -146,6 +158,44 @@ class Runtime:
                 used.add(key)
         return result
 
+    def _haptic_channels(self, kind: str, intensity: float) -> tuple[float, float]:
+        strength = min(1.0, max(0.0, float(intensity)))
+        if kind == "changing_values":
+            # A short, crisp detent: mostly the lighter/faster motor.
+            return strength * 0.08, strength
+        # Warning channel: deliberately heavier and physically distinct.
+        return strength, strength * 0.55
+
+    def _rumble_profile(
+        self,
+        device_key: str,
+        kind: str,
+        intensity: float,
+        duration_ms: int,
+    ) -> dict[str, Any]:
+        if self.controllers is None:
+            return {"ok": False, "selected_method": None, "attempts": [], "error": "backend offline"}
+        low, high = self._haptic_channels(kind, intensity)
+        attempts: list[dict[str, Any]] = []
+        for method in ("gamecontroller", "joystick", "haptic"):
+            attempt = self.controllers.rumble_method(device_key, method, low, high, duration_ms)
+            attempts.append(attempt)
+            if attempt.get("ok"):
+                return {
+                    "ok": True,
+                    "selected_method": method,
+                    "low_strength": low,
+                    "high_strength": high,
+                    "attempts": attempts,
+                }
+        return {
+            "ok": False,
+            "selected_method": None,
+            "low_strength": low,
+            "high_strength": high,
+            "attempts": attempts,
+        }
+
     def test_haptic(self, kind: str, role: str | None = None) -> dict[str, Any]:
         if kind not in {"changing_values", "warnings"}:
             raise ValueError("kind must be changing_values or warnings")
@@ -169,12 +219,17 @@ class Runtime:
             if not device_key:
                 results[target_role] = {"ok": False, "error": "role is not online"}
                 continue
-            results[target_role] = self.controllers.rumble_detailed(device_key, strength, duration_ms)
+            results[target_role] = self._rumble_profile(
+                device_key, kind, strength, duration_ms
+            )
 
+        low, high = self._haptic_channels(kind, strength)
         payload = {
             "kind": kind,
             "role": role,
             "intensity": strength,
+            "low_strength": low,
+            "high_strength": high,
             "duration_ms": duration_ms,
             "results": results,
             "at": time.time(),
@@ -293,8 +348,9 @@ class Runtime:
                 and change.get("enabled", True)
                 and self.controllers
             ):
-                self.controllers.rumble(
+                self._rumble_profile(
                     device_key,
+                    "changing_values",
                     float(change.get("intensity", 0.12)),
                     int(change.get("duration_ms", 24)),
                 )
@@ -351,22 +407,50 @@ class Runtime:
                     self.rotary.reset(key)
             await asyncio.sleep(1 / 60)
 
+    def _readiness(
+        self,
+        cfg: dict[str, Any],
+        role_devices: dict[str, str | None],
+        simconnect: dict[str, Any],
+    ) -> dict[str, Any]:
+        active = list(enabled_roles(cfg))
+        missing = [role for role in active if not role_devices.get(role)]
+        sim_ok = bool(simconnect.get("connected"))
+        return {
+            "ready": not missing and sim_ok,
+            "controllers_ready": not missing,
+            "simconnect_ready": sim_ok,
+            "missing_roles": missing,
+            "active_roles": active,
+        }
+
     def public_state(self) -> dict[str, Any]:
         cfg = self.config_store.snapshot()
         active = set(enabled_roles(cfg))
         snapshots = self.controllers.poll() if self.controllers else {}
         role_devices = self._role_devices(snapshots) if self.controllers else {role: None for role in ROLES}
+        simconnect = self.bridge.state()
 
         roles: dict[str, Any] = {}
         for role in ROLES:
             key = role_devices.get(role)
+            live = snapshots.get(key) if key else None
+            axes = copy.deepcopy(live.get("axes", {})) if live else {}
+            buttons = copy.deepcopy(live.get("buttons", {})) if live else {}
             roles[role] = {
                 **copy.deepcopy(cfg["roles"][role]),
                 "enabled": role in active,
                 "online": bool(key),
                 "runtime_device_key": key,
-                "runtime_device": copy.deepcopy(snapshots[key]["identity"]) if key else None,
+                "runtime_device": copy.deepcopy(live["identity"]) if live else None,
                 "bindings": copy.deepcopy(cfg["bindings"].get(role, [])),
+                "input": {
+                    "axes": axes,
+                    "buttons": buttons,
+                    "pressed_buttons": sorted(name for name, value in buttons.items() if value),
+                    "left_stick": _stick_live(axes, "left"),
+                    "right_stick": _stick_live(axes, "right"),
+                } if live else None,
             }
 
         return {
@@ -375,7 +459,8 @@ class Runtime:
             "features": copy.deepcopy(cfg.get("features", {})),
             "available_devices": [copy.deepcopy(s["identity"]) for s in snapshots.values()],
             "assignment_target": self.assignment_target,
-            "simconnect": self.bridge.state(),
+            "simconnect": simconnect,
+            "readiness": self._readiness(cfg, role_devices, simconnect),
             "rotary": copy.deepcopy(cfg["rotary"]),
             "haptics": copy.deepcopy(cfg.get("haptics", {})),
             "last_haptic_test": copy.deepcopy(self.last_haptic_test),
