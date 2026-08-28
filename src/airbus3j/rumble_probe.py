@@ -21,7 +21,16 @@ def _felt(prompt: str) -> dict[str, Any]:
         value = False
     else:
         value = None
-    return {"felt": value, "raw": raw}
+    return {"felt": value, "raw": raw, "source": "user"}
+
+
+def _not_run_observation(reason: str) -> dict[str, Any]:
+    return {
+        "felt": None,
+        "raw": None,
+        "source": "not_run",
+        "reason": reason,
+    }
 
 
 def _match_role(backend: ControllerBackend, saved: dict[str, Any] | None, used: set[str]) -> str | None:
@@ -64,7 +73,7 @@ def main() -> None:
     print("until the controller is power-cycled. The probe itself does not send MSFS events.\n")
 
     report: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
         "environment": {
             "python": platform.python_version(),
@@ -117,8 +126,14 @@ def main() -> None:
                 print(f"  SDL result: {'OK' if result.get('ok') else 'FAILED'}")
                 if result.get("error") or result.get("sdl_error"):
                     print(f"  error: {result.get('error') or result.get('sdl_error')}")
-                time.sleep((duration / 1000.0) + 0.15)
-                observation = _felt("Did you physically feel vibration?")
+                if result.get("ok"):
+                    time.sleep((duration / 1000.0) + 0.15)
+                    observation = _felt("Did you physically feel vibration?")
+                else:
+                    observation = _not_run_observation(
+                        "Backend call failed before a meaningful physical vibration test could be performed"
+                    )
+                    print("  Physical-feel question skipped because the backend call failed.")
                 items.append({"label": label, "call": result, "observation": observation})
             role_reports[role] = {"identity": device.public_identity(), "capabilities": capabilities, "tests": items}
         report["roles"] = role_reports
