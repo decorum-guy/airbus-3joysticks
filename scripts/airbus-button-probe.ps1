@@ -12,9 +12,11 @@ if (-not (Test-Path $VenvPython)) {
     throw "Virtual environment was not created successfully."
 }
 
+Write-Host "The original H-event probe is retired. Running stock A320 button probe v2 instead..." -ForegroundColor Yellow
+
 Push-Location $RepoRoot
 try {
-    & $VenvPython -m airbus3j.airbus_button_probe
+    & $VenvPython -m airbus3j.stock_airbus_probe
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
