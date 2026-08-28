@@ -1,14 +1,18 @@
 # Next implementation steps
 
-The controller/runtime MVP is now substantially complete. Remaining work is mostly aircraft-specific or packaging polish.
+The two-controller controller/runtime core is validated end-to-end. Remaining work is now mostly aircraft-specific integration and product packaging.
 
-1. Run `scripts/vs-dec-probe.ps1` and validate `AP_VS_VAR_DEC` for counter-clockwise V/S.
-2. Perform one end-to-end cockpit smoke test with the production service: circular stick detent -> visible FCU change -> crisp haptic tick, for SPD / HDG / ALT / V/S.
-3. Implement a verified stock-A320-specific backend for FCU PUSH/PULL. Do not guess generic events for managed/selected semantics.
-4. Through that verified backend, add AP1 / AP2 / A/THR / SPD-MACH / TRK-FPA and any other currently pending LEFT/RIGHT buttons.
-5. Connect real aircraft warning state (Master Warning, Master Caution, and selected additional warning cues) to the already-implemented warning haptic channel and define priority/pattern rules.
+1. Ship and tune the precision-first adaptive rotary response: slow rotation for exact values, faster rotation for coarse changes, with a hard no-backlog event-rate limiter.
+2. Implement a verified stock-A320-specific backend for FCU PUSH/PULL. Do not guess generic events for managed/selected semantics.
+3. Through that verified backend, add AP1 / AP2 / A/THR / SPD-MACH / TRK-FPA and the other currently pending LEFT/RIGHT buttons.
+4. Connect real aircraft warning state (Master Warning, Master Caution, and selected additional warning cues) to the already-implemented warning haptic channel and define priority/pattern rules.
+5. Add browser-exposed rotary tuning once the new precision profile has been flight-tested, so slow/fast response can be adjusted without editing config files.
 6. When a third controller is available, enable the preserved CENTER profile and validate EFIS/RADIO actions.
-7. After real-flight use, optionally tune detent angle, per-control acceleration, and haptic durations.
-8. Optional product polish: Windows tray/autostart and standalone executable packaging.
+7. Product polish: Windows tray/autostart, graceful background operation, and standalone executable packaging so normal use does not require a terminal or Python setup.
 
-Validated haptic transport: SDL GameController rumble with PS4 Bluetooth extended reports, with SDL Joystick rumble as a verified fallback. Both low and high motors were physically verified independently on both active controllers.
+Validated core:
+
+- SPD / HDG / ALT / V/S rotary directions: both directions validated in the cockpit.
+- persistent LEFT/RIGHT controller identity: validated across reconnects.
+- SimConnect runtime bridge and live panel: validated.
+- haptics: SDL GameController rumble with PS4 Bluetooth extended reports, SDL Joystick fallback; both low and high motors physically verified on both controllers.
