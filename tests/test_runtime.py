@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from airbus3j.config import ConfigStore
 from airbus3j.runtime import Runtime, enabled_roles
 
@@ -79,6 +81,28 @@ def test_disabled_center_is_not_resolved_to_a_device(tmp_path: Path):
         }}
     }
     assert runtime._role_devices(snapshots)["center"] is None
+
+
+def test_default_haptics_have_independent_intensities(tmp_path: Path):
+    cfg = ConfigStore(tmp_path / "config.json").snapshot()
+    assert cfg["haptics"]["changing_values"]["intensity"] != cfg["haptics"]["warnings"]["intensity"]
+    assert cfg["haptics"]["ps4_bluetooth_extended_reports"] is True
+
+
+def test_haptic_settings_persist_and_validate_range(tmp_path: Path):
+    path = tmp_path / "config.json"
+    store = ConfigStore(path)
+    updated = store.update_haptics({
+        "changing_values": {"intensity": 0.22},
+        "warnings": {"intensity": 0.81},
+    })
+    assert updated["changing_values"]["intensity"] == 0.22
+    assert updated["warnings"]["intensity"] == 0.81
+    reloaded = ConfigStore(path).snapshot()
+    assert reloaded["haptics"]["changing_values"]["intensity"] == 0.22
+    assert reloaded["haptics"]["warnings"]["intensity"] == 0.81
+    with pytest.raises(ValueError):
+        store.update_haptics({"warnings": {"intensity": 1.5}})
 
 
 def test_combo_precedence_does_not_also_fire_base_button(tmp_path: Path):
