@@ -33,10 +33,24 @@ def default_config() -> dict[str, Any]:
         "version": 1,
         "server": {"host": "0.0.0.0", "port": 8765},
         "features": {
-            # Current physical setup has two working gamepads. Keep the complete
-            # CENTER/EFIS/RADIO profile in the project, but do not require or
-            # route a third controller until this flag is explicitly enabled.
             "center_controller_enabled": False,
+        },
+        "haptics": {
+            "enabled": True,
+            # Required by SDL for rumble on Bluetooth PS4 controllers. SDL warns
+            # that enabling extended reports can affect DirectInput users until
+            # the controller is power-cycled, so expose this explicitly in UI.
+            "ps4_bluetooth_extended_reports": True,
+            "changing_values": {
+                "enabled": True,
+                "intensity": 0.12,
+                "duration_ms": 24,
+            },
+            "warnings": {
+                "enabled": True,
+                "intensity": 0.70,
+                "duration_ms": 650,
+            },
         },
         "roles": {
             "left": {"display_name": "LEFT · FCU SPD / HDG", "device": None},
@@ -48,6 +62,8 @@ def default_config() -> dict[str, Any]:
             "inner_radius": 0.32,
             "detent_degrees": 22.5,
             "clockwise_is_increment": True,
+            # Legacy keys retained for config compatibility; new runtime uses
+            # haptics.changing_values for rotary tactile ticks.
             "rumble": True,
             "rumble_strength": 0.12,
             "rumble_ms": 18,
@@ -157,8 +173,6 @@ class ConfigStore:
             self._write(defaults)
             return defaults
 
-        # Keep this intentionally conservative for v1: only fill missing top-level
-        # sections. Do not overwrite user-edited bindings during upgrades.
         for key, value in defaults.items():
             loaded.setdefault(key, copy.deepcopy(value))
         for role, role_defaults in defaults["roles"].items():
@@ -201,3 +215,39 @@ class ConfigStore:
         with self._lock:
             self._config["bindings"][role] = copy.deepcopy(bindings)
             self._write(self._config)
+
+    def update_haptics(self, haptics: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(haptics, dict):
+            raise TypeError("haptics must be an object")
+        current = copy.deepcopy(self.snapshot().get("haptics", default_config()["haptics"]))
+        for section in ("changing_values", "warnings"):
+            incoming = haptics.get(section, {})
+            if incoming is not None and not isinstance(incoming, dict):
+                raise TypeError(f"haptics.{section} must be an object")
+            for key, value in (incoming or {}).items():
+                if key == "intensity":
+                    value = float(value)
+                    if not 0.0 <= value <= 1.0:
+                        raise ValueError(f"haptics.{section}.intensity must be between 0 and 1")
+                elif key == "duration_ms":
+                    value = int(value)
+                    if not 5 <= value <= 5000:
+                        raise ValueError(f"haptics.{section}.duration_ms must be between 5 and 5000")
+                elif key == "enabled":
+                    value = bool(value)
+                else:
+                    raise ValueError(f"unsupported haptics.{section} field: {key}")
+                current[section][key] = value
+
+        for key in ("enabled", "ps4_bluetooth_extended_reports"):
+            if key in haptics:
+                current[key] = bool(haptics[key])
+
+        unknown = set(haptics) - {"enabled", "ps4_bluetooth_extended_reports", "changing_values", "warnings"}
+        if unknown:
+            raise ValueError(f"unsupported haptics field(s): {', '.join(sorted(unknown))}")
+
+        with self._lock:
+            self._config["haptics"] = current
+            self._write(self._config)
+        return copy.deepcopy(current)
