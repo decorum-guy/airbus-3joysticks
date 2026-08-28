@@ -6,6 +6,8 @@ The application is a Windows-side controller service for MSFS 2020. It owns thre
 
 The browser is a view/editor; flight-control input must continue to work if no browser is open.
 
+The current hardware phase can run with the CENTER role disabled by feature flag while preserving its profile and bindings for a future third wireless controller.
+
 ## Components
 
 ### `ConfigStore`
@@ -95,6 +97,29 @@ Required actions include:
 - EFIS ND range/mode and CSTR/WPT/VOR D/ARPT.
 
 These are `pending` in the starter config until verified. A plausible but unverified event is not acceptable.
+
+### Haptic cockpit alerts (future milestone)
+
+Use controller rumble as an optional tactile annunciation layer once the relevant A320 state variables and acknowledgement events have been verified.
+
+Potential outputs:
+- a strong repeating pattern for Master Warning;
+- a distinct lower-priority pattern for Master Caution;
+- an optional continuous/repeating high-urgency vibration for stall warning / low-speed protection cues;
+- additional carefully selected aircraft warnings only when the simulator exposes a trustworthy state signal.
+
+Potential inputs:
+- dedicated controller buttons or button combinations for Master Warning acknowledgement/reset;
+- dedicated controller buttons or button combinations for Master Caution acknowledgement/reset.
+
+This is an enhancement rather than a claim of physical A320 fidelity. The real A320 sidestick does not use a conventional mechanical stick shaker; any stall-related gamepad vibration is therefore a deliberate custom tactile cue.
+
+Implementation requirements:
+- warning patterns must be distinguishable by feel;
+- alert rumble must take priority over the short rotary-detent tick;
+- no warning state may be guessed from generic events alone;
+- acknowledgement/reset actions remain `pending` until exact stock-A320 semantics are verified;
+- provide per-alert enable/disable and strength settings because controller rumble strength varies significantly by hardware and connection mode.
 
 ### Web server
 
