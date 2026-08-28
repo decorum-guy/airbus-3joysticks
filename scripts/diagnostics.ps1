@@ -14,6 +14,7 @@ if (-not (Test-Path $Python)) {
 
 Set-Location $Root
 Write-Host 'Starting Airbus 3 Joysticks guided diagnostics...' -ForegroundColor Cyan
+Write-Host 'Active roles are read from config feature flags.' -ForegroundColor DarkCyan
 Write-Host 'Do not run scripts\run.ps1 at the same time.' -ForegroundColor DarkYellow
-& $Python -m airbus3j.diagnostics
+& $Python -m airbus3j.diagnostics_current
 exit $LASTEXITCODE
