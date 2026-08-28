@@ -1,0 +1,9 @@
+.rotary-tuning{margin-top:10px;padding-top:10px;border-top:1px solid rgba(38,64,82,.65)}
+.rotary-tuning-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.rotary-tuning-title{font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.07em}
+.rotary-tuning-value{font:800 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--cyan)}
+.rotary-tuning input[type=range]{width:100%;accent-color:var(--cyan);cursor:pointer}
+.rotary-tuning-scale{display:flex;justify-content:space-between;color:var(--muted);font-size:9px;margin-top:1px}
+.rotary-tuning-actions{display:flex;justify-content:flex-end;margin-top:7px}
+.rotary-tuning-actions button{font-size:10px;padding:5px 8px}
+.rotary-tuning-note{font-size:9px;color:var(--muted);margin-top:5px;line-height:1.25}

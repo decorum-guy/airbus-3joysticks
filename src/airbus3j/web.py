@@ -6,15 +6,28 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
-from .runtime import ROLES, Runtime
+from .rotary_settings import CONTROL_ROUTES, RotarySensitivityStore
+from .runtime import ROLES, ROTARY_PRECISION_SCALES, Runtime
 
 
 STATIC_DIR = Path(__file__).with_name("static")
 
 
 def create_app(runtime: Runtime) -> FastAPI:
+    rotary_sensitivity = RotarySensitivityStore()
+
+    def apply_rotary_sensitivity(snapshot: dict[str, Any]) -> None:
+        values = snapshot["values"]
+        for control, route in CONTROL_ROUTES.items():
+            precision = float(values[control])
+            ROTARY_PRECISION_SCALES[route] = (precision, precision)
+        # Avoid carrying partial angular accumulation across a live tuning change.
+        runtime.rotary.reset()
+
+    apply_rotary_sensitivity(rotary_sensitivity.snapshot())
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await runtime.start()
@@ -23,11 +36,28 @@ def create_app(runtime: Runtime) -> FastAPI:
         finally:
             await runtime.stop()
 
-    app = FastAPI(title="Airbus 3 Joysticks", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Airbus 3 Joysticks", version="0.3.0", lifespan=lifespan)
 
     @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    async def index() -> HTMLResponse:
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        html = html.replace(
+            "</head>",
+            '<link rel="stylesheet" href="/rotary-controls.css" /></head>',
+        )
+        html = html.replace(
+            "</body>",
+            '<script src="/rotary-controls.js"></script></body>',
+        )
+        return HTMLResponse(html)
+
+    @app.get("/rotary-controls.css")
+    async def rotary_controls_css() -> FileResponse:
+        return FileResponse(STATIC_DIR / "rotary-controls.css", media_type="text/css")
+
+    @app.get("/rotary-controls.js")
+    async def rotary_controls_js() -> FileResponse:
+        return FileResponse(STATIC_DIR / "rotary-controls.js", media_type="text/javascript")
 
     @app.get("/editor")
     async def editor() -> FileResponse:
@@ -67,6 +97,41 @@ def create_app(runtime: Runtime) -> FastAPI:
             },
             "simconnect": state["simconnect"],
         }
+
+    @app.get("/api/rotary-sensitivity")
+    async def get_rotary_sensitivity() -> dict[str, Any]:
+        return rotary_sensitivity.snapshot()
+
+    @app.put("/api/rotary-sensitivity/{control}")
+    async def update_rotary_sensitivity(
+        control: str,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        if "precision" not in payload:
+            raise HTTPException(status_code=400, detail="precision is required")
+        try:
+            snapshot = rotary_sensitivity.set(control, payload["precision"])
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown rotary control") from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        apply_rotary_sensitivity(snapshot)
+        return {"ok": True, "sensitivity": snapshot}
+
+    @app.post("/api/rotary-sensitivity/{control}/reset")
+    async def reset_rotary_sensitivity(control: str) -> dict[str, Any]:
+        try:
+            snapshot = rotary_sensitivity.reset(control)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Unknown rotary control") from exc
+        apply_rotary_sensitivity(snapshot)
+        return {"ok": True, "sensitivity": snapshot}
+
+    @app.post("/api/rotary-sensitivity/reset")
+    async def reset_all_rotary_sensitivity() -> dict[str, Any]:
+        snapshot = rotary_sensitivity.reset()
+        apply_rotary_sensitivity(snapshot)
+        return {"ok": True, "sensitivity": snapshot}
 
     @app.post("/api/assign/cancel")
     async def cancel_assignment() -> dict[str, Any]:
