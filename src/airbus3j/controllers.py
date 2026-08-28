@@ -36,9 +36,6 @@ BUTTONS = {
     "dpad_right": sdl2.SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
 }
 
-# SDL added several standardized buttons after the original game-controller API.
-# Add them when the packaged SDL/PySDL2 exposes them. This is especially useful
-# for PlayStation touchpad-click detection without making older SDL builds fail.
 for _name, _symbol in (
     ("misc1", "SDL_CONTROLLER_BUTTON_MISC1"),
     ("paddle1", "SDL_CONTROLLER_BUTTON_PADDLE1"),
@@ -57,10 +54,29 @@ def _decode(value: bytes | None) -> str | None:
     return value.decode("utf-8", errors="replace")
 
 
+def _sdl_error() -> str | None:
+    try:
+        return _decode(sdl2.SDL_GetError())
+    except Exception:
+        return None
+
+
+def _clear_sdl_error() -> None:
+    try:
+        if hasattr(sdl2, "SDL_ClearError"):
+            sdl2.SDL_ClearError()
+    except Exception:
+        pass
+
+
 def _axis(value: int) -> float:
     if value >= 0:
         return min(1.0, value / 32767.0)
     return max(-1.0, value / 32768.0)
+
+
+def _amplitude(strength: float) -> int:
+    return int(min(1.0, max(0.0, float(strength))) * 0xFFFF)
 
 
 @dataclass
@@ -74,6 +90,8 @@ class ControllerDevice:
     guid: str
     vendor_id: int
     product_id: int
+    haptic: Any | None = None
+    haptic_initialized: bool = False
 
     def public_identity(self) -> dict[str, Any]:
         return {
@@ -89,7 +107,16 @@ class ControllerDevice:
 
 
 class ControllerBackend:
-    def __init__(self) -> None:
+    def __init__(self, enable_ps4_bt_rumble: bool = False) -> None:
+        self.enable_ps4_bt_rumble = bool(enable_ps4_bt_rumble)
+        # SDL requires this hint before controller initialization for extended
+        # Bluetooth reports on PS4 controllers. It is opt-in because SDL warns
+        # that extended reports can affect DirectInput users until power cycle.
+        if self.enable_ps4_bt_rumble and hasattr(sdl2, "SDL_SetHint"):
+            sdl2.SDL_SetHint(b"SDL_JOYSTICK_HIDAPI", b"1")
+            sdl2.SDL_SetHint(b"SDL_JOYSTICK_HIDAPI_PS4", b"1")
+            sdl2.SDL_SetHint(b"SDL_JOYSTICK_HIDAPI_PS4_RUMBLE", b"1")
+
         flags = sdl2.SDL_INIT_GAMECONTROLLER | sdl2.SDL_INIT_HAPTIC | sdl2.SDL_INIT_EVENTS
         if sdl2.SDL_Init(flags) != 0:
             raise RuntimeError(_decode(sdl2.SDL_GetError()) or "SDL_Init failed")
@@ -98,12 +125,22 @@ class ControllerBackend:
         self._last_scan_at = 0.0
         self.scan(force=True)
 
-    def close(self) -> None:
-        for device in list(self.devices.values()):
+    def _close_device(self, device: ControllerDevice) -> None:
+        if device.haptic is not None:
             try:
-                sdl2.SDL_GameControllerClose(device.controller)
+                sdl2.SDL_HapticClose(device.haptic)
             except Exception:
                 pass
+            device.haptic = None
+            device.haptic_initialized = False
+        try:
+            sdl2.SDL_GameControllerClose(device.controller)
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        for device in list(self.devices.values()):
+            self._close_device(device)
         self.devices.clear()
         sdl2.SDL_QuitSubSystem(sdl2.SDL_INIT_GAMECONTROLLER | sdl2.SDL_INIT_HAPTIC | sdl2.SDL_INIT_EVENTS)
 
@@ -130,8 +167,6 @@ class ControllerBackend:
             raw = f"path|{path}"
             prefix = "path"
         else:
-            # Instance ID is intentionally included only as the last-resort key.
-            # This key is not promised to survive reconnects.
             raw = f"fallback|{guid}|{vendor_id}|{product_id}|{name}|{instance_id}"
             prefix = "fallback"
         digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
@@ -149,10 +184,7 @@ class ControllerBackend:
 
         old_keys = set(self.devices)
         for device in list(self.devices.values()):
-            try:
-                sdl2.SDL_GameControllerClose(device.controller)
-            except Exception:
-                pass
+            self._close_device(device)
         self.devices.clear()
 
         for index in range(count):
@@ -165,14 +197,11 @@ class ControllerBackend:
             instance_id = int(sdl2.SDL_JoystickInstanceID(joystick))
             name = _decode(sdl2.SDL_GameControllerName(controller)) or f"Controller {index + 1}"
             serial = _decode(sdl2.SDL_JoystickGetSerial(joystick))
-            # SDL_JoystickPath is available in SDL >= 2.24; packaged SDL is 2.32.x.
             path = _decode(sdl2.SDL_JoystickPath(joystick)) if hasattr(sdl2, "SDL_JoystickPath") else None
             guid = self._guid_string(joystick)
             vendor_id = int(sdl2.SDL_JoystickGetVendor(joystick)) if hasattr(sdl2, "SDL_JoystickGetVendor") else 0
             product_id = int(sdl2.SDL_JoystickGetProduct(joystick)) if hasattr(sdl2, "SDL_JoystickGetProduct") else 0
             key = self._device_key(serial, path, guid, vendor_id, product_id, name, instance_id)
-
-            # In the extremely unlikely case of a collision, keep the devices distinct.
             if key in self.devices:
                 key = f"{key}:{instance_id}"
 
@@ -214,11 +243,106 @@ class ControllerBackend:
             }
         return snapshots
 
-    def rumble(self, device_key: str, strength: float, duration_ms: int) -> bool:
+    def rumble_capabilities(self, device_key: str) -> dict[str, Any]:
         device = self.devices.get(device_key)
-        if not device or not hasattr(sdl2, "SDL_GameControllerRumble"):
-            return False
-        strength = min(1.0, max(0.0, strength))
-        amplitude = int(strength * 0xFFFF)
-        result = sdl2.SDL_GameControllerRumble(device.controller, amplitude, amplitude, int(duration_ms))
-        return result == 0
+        if not device:
+            return {"ok": False, "error": "device not found"}
+        joystick = sdl2.SDL_GameControllerGetJoystick(device.controller)
+        result: dict[str, Any] = {
+            "ok": True,
+            "ps4_bt_extended_reports_enabled": self.enable_ps4_bt_rumble,
+            "gamecontroller_has_rumble": None,
+            "joystick_has_rumble": None,
+            "joystick_is_haptic": None,
+        }
+        try:
+            if hasattr(sdl2, "SDL_GameControllerHasRumble"):
+                result["gamecontroller_has_rumble"] = bool(sdl2.SDL_GameControllerHasRumble(device.controller))
+            if hasattr(sdl2, "SDL_JoystickHasRumble"):
+                result["joystick_has_rumble"] = bool(sdl2.SDL_JoystickHasRumble(joystick))
+            if hasattr(sdl2, "SDL_JoystickIsHaptic"):
+                result["joystick_is_haptic"] = bool(sdl2.SDL_JoystickIsHaptic(joystick))
+        except Exception as exc:
+            result["capability_error"] = str(exc)
+        return result
+
+    def _ensure_haptic(self, device: ControllerDevice) -> tuple[Any | None, str | None]:
+        if device.haptic is not None and device.haptic_initialized:
+            return device.haptic, None
+        if not all(
+            hasattr(sdl2, name)
+            for name in ("SDL_HapticOpenFromJoystick", "SDL_HapticRumbleInit", "SDL_HapticRumbleSupported")
+        ):
+            return None, "SDL haptic rumble API unavailable"
+        joystick = sdl2.SDL_GameControllerGetJoystick(device.controller)
+        _clear_sdl_error()
+        haptic = sdl2.SDL_HapticOpenFromJoystick(joystick)
+        if not haptic:
+            return None, _sdl_error() or "SDL_HapticOpenFromJoystick failed"
+        device.haptic = haptic
+        supported = int(sdl2.SDL_HapticRumbleSupported(haptic))
+        if supported <= 0:
+            return None, _sdl_error() or "simple haptic rumble not supported"
+        if int(sdl2.SDL_HapticRumbleInit(haptic)) != 0:
+            return None, _sdl_error() or "SDL_HapticRumbleInit failed"
+        device.haptic_initialized = True
+        return haptic, None
+
+    def rumble_method(
+        self,
+        device_key: str,
+        method: str,
+        low_strength: float,
+        high_strength: float,
+        duration_ms: int,
+    ) -> dict[str, Any]:
+        device = self.devices.get(device_key)
+        if not device:
+            return {"ok": False, "method": method, "error": "device not found"}
+        low = _amplitude(low_strength)
+        high = _amplitude(high_strength)
+        duration = max(1, int(duration_ms))
+        _clear_sdl_error()
+        try:
+            if method == "gamecontroller":
+                if not hasattr(sdl2, "SDL_GameControllerRumble"):
+                    return {"ok": False, "method": method, "error": "SDL_GameControllerRumble unavailable"}
+                rc = int(sdl2.SDL_GameControllerRumble(device.controller, low, high, duration))
+            elif method == "joystick":
+                if not hasattr(sdl2, "SDL_JoystickRumble"):
+                    return {"ok": False, "method": method, "error": "SDL_JoystickRumble unavailable"}
+                joystick = sdl2.SDL_GameControllerGetJoystick(device.controller)
+                rc = int(sdl2.SDL_JoystickRumble(joystick, low, high, duration))
+            elif method == "haptic":
+                if not hasattr(sdl2, "SDL_HapticRumblePlay"):
+                    return {"ok": False, "method": method, "error": "SDL_HapticRumblePlay unavailable"}
+                haptic, error = self._ensure_haptic(device)
+                if haptic is None:
+                    return {"ok": False, "method": method, "error": error}
+                strength = max(float(low_strength), float(high_strength))
+                rc = int(sdl2.SDL_HapticRumblePlay(haptic, min(1.0, max(0.0, strength)), duration))
+            else:
+                return {"ok": False, "method": method, "error": f"unknown rumble method: {method}"}
+        except Exception as exc:
+            return {"ok": False, "method": method, "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "ok": rc == 0,
+            "method": method,
+            "return_code": rc,
+            "sdl_error": None if rc == 0 else _sdl_error(),
+            "low_strength": float(low_strength),
+            "high_strength": float(high_strength),
+            "duration_ms": duration,
+        }
+
+    def rumble_detailed(self, device_key: str, strength: float, duration_ms: int) -> dict[str, Any]:
+        attempts: list[dict[str, Any]] = []
+        for method in ("gamecontroller", "joystick", "haptic"):
+            attempt = self.rumble_method(device_key, method, strength, strength, duration_ms)
+            attempts.append(attempt)
+            if attempt.get("ok"):
+                return {"ok": True, "selected_method": method, "attempts": attempts}
+        return {"ok": False, "selected_method": None, "attempts": attempts}
+
+    def rumble(self, device_key: str, strength: float, duration_ms: int) -> bool:
+        return bool(self.rumble_detailed(device_key, strength, duration_ms).get("ok"))
