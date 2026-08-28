@@ -14,10 +14,8 @@ if (-not (Test-Path $VenvPython)) {
 
 Push-Location $RepoRoot
 try {
-    & $VenvPython -m airbus3j.stock_airbus_probe_guard
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
+    & $VenvPython -m airbus3j.aircraft_identity
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 finally {
     Pop-Location
