@@ -14,6 +14,11 @@ from .simconnect_bridge import SimConnectBridge
 ROLES = ("left", "center", "right")
 
 
+def enabled_roles(cfg: dict[str, Any]) -> tuple[str, ...]:
+    center_enabled = bool(cfg.get("features", {}).get("center_controller_enabled", False))
+    return tuple(role for role in ROLES if role != "center" or center_enabled)
+
+
 class Runtime:
     def __init__(self, config: ConfigStore):
         self.config_store = config
@@ -55,6 +60,10 @@ class Runtime:
     def arm_assignment(self, role: str) -> None:
         if role not in ROLES:
             raise KeyError(role)
+        cfg = self.config_store.snapshot()
+        if role not in enabled_roles(cfg):
+            self.assignment_target = None
+            return
         self.assignment_target = role
 
     def cancel_assignment(self) -> None:
@@ -98,9 +107,6 @@ class Runtime:
             if len(matches) == 1:
                 return matches[0]
 
-        # Last-resort matching is allowed only when unambiguous. With two
-        # identical controllers and no serial/path, silently guessing would be
-        # worse than asking for re-assignment.
         fields = ("guid", "vendor_id", "product_id", "name")
         matches = []
         for key, snap in snapshots.items():
@@ -113,9 +119,13 @@ class Runtime:
 
     def _role_devices(self, snapshots: dict[str, dict[str, Any]]) -> dict[str, str | None]:
         cfg = self.config_store.snapshot()
+        active = set(enabled_roles(cfg))
         used: set[str] = set()
         result: dict[str, str | None] = {}
         for role in ROLES:
+            if role not in active:
+                result[role] = None
+                continue
             key = self._find_device_for_saved_identity(cfg["roles"][role].get("device"), snapshots, used)
             result[role] = key
             if key:
@@ -217,7 +227,7 @@ class Runtime:
 
             direction = "clockwise" if detents > 0 else "counter_clockwise"
             action = binding.get(direction)
-            count = min(abs(detents), 12)  # guard against pathological input spikes
+            count = min(abs(detents), 12)
             for _ in range(count):
                 self._dispatch_action(
                     role,
@@ -237,6 +247,10 @@ class Runtime:
     def _maybe_assign(self, snapshots: dict[str, dict[str, Any]]) -> bool:
         target = self.assignment_target
         if not target:
+            return False
+        cfg = self.config_store.snapshot()
+        if target not in enabled_roles(cfg):
+            self.assignment_target = None
             return False
         for device_key, snapshot in snapshots.items():
             pressed = {name for name, value in snapshot["buttons"].items() if value}
@@ -276,7 +290,6 @@ class Runtime:
                 self._route_buttons(role, device_key, snapshot, bindings)
                 self._route_rotaries(role, device_key, snapshot, bindings, cfg)
 
-            # Prune stale edge state after disconnects.
             for key in list(self._previous_buttons):
                 if key not in snapshots:
                     self._previous_buttons.pop(key, None)
@@ -285,6 +298,7 @@ class Runtime:
 
     def public_state(self) -> dict[str, Any]:
         cfg = self.config_store.snapshot()
+        active = set(enabled_roles(cfg))
         snapshots = self.controllers.poll() if self.controllers else {}
         role_devices = self._role_devices(snapshots) if self.controllers else {role: None for role in ROLES}
 
@@ -293,6 +307,7 @@ class Runtime:
             key = role_devices.get(role)
             roles[role] = {
                 **copy.deepcopy(cfg["roles"][role]),
+                "enabled": role in active,
                 "online": bool(key),
                 "runtime_device_key": key,
                 "runtime_device": copy.deepcopy(snapshots[key]["identity"]) if key else None,
@@ -301,6 +316,8 @@ class Runtime:
 
         return {
             "roles": roles,
+            "enabled_roles": list(enabled_roles(cfg)),
+            "features": copy.deepcopy(cfg.get("features", {})),
             "available_devices": [copy.deepcopy(s["identity"]) for s in snapshots.values()],
             "assignment_target": self.assignment_target,
             "simconnect": self.bridge.state(),
