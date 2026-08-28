@@ -33,6 +33,10 @@ def create_app(runtime: Runtime) -> FastAPI:
     async def editor() -> FileResponse:
         return FileResponse(STATIC_DIR / "editor.html")
 
+    @app.get("/haptics")
+    async def haptics_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "haptics.html")
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {"ok": True, "simconnect": runtime.bridge.state()}
@@ -69,6 +73,25 @@ def create_app(runtime: Runtime) -> FastAPI:
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "bindings": bindings}
+
+    @app.put("/api/haptics")
+    async def update_haptics(haptics: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        try:
+            result = runtime.update_haptics(haptics)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **result}
+
+    @app.post("/api/haptics/test/{kind}")
+    async def test_haptics(kind: str, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        role = payload.get("role") if isinstance(payload, dict) else None
+        try:
+            result = runtime.test_haptic(kind, role=role)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"ok": True, "test": result}
 
     @app.websocket("/ws")
     async def websocket_state(websocket: WebSocket) -> None:
