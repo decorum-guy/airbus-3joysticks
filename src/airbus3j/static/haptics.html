@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Airbus 3 Joysticks · Haptics</title>
+  <style>
+    :root { color-scheme: dark; --bg:#071019; --panel:#0c1823; --line:#264052; --text:#e9f1f6; --muted:#8fa7b7; --cyan:#63d7ff; --green:#55d58b; --amber:#f4bf5f; --red:#ff7575; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; background:radial-gradient(circle at 50% -20%,#153047 0,var(--bg) 45%); color:var(--text); min-height:100vh; }
+    header { border-bottom:1px solid var(--line); padding:16px 20px; display:flex; justify-content:space-between; gap:16px; align-items:center; background:rgba(7,16,25,.92); position:sticky; top:0; }
+    h1 { margin:0; font-size:18px; }
+    a { color:var(--cyan); text-decoration:none; }
+    main { max-width:980px; margin:0 auto; padding:24px; }
+    .notice { border:1px solid #4a4130; background:rgba(244,191,95,.08); color:#e7d3a8; padding:12px 14px; border-radius:12px; margin-bottom:16px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .card { background:linear-gradient(180deg,rgba(16,31,44,.96),rgba(9,20,29,.96)); border:1px solid var(--line); border-radius:16px; padding:18px; }
+    h2 { margin:0 0 6px; font-size:17px; }
+    .sub { color:var(--muted); min-height:44px; }
+    .value { font:700 30px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--cyan); margin:18px 0 4px; }
+    input[type=range] { width:100%; accent-color:var(--cyan); }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+    button,select { border:1px solid #34556d; background:#112b3d; color:var(--text); border-radius:9px; padding:9px 12px; font-weight:700; }
+    button { cursor:pointer; }
+    button:hover { background:#17384e; }
+    button.primary { background:#17415a; }
+    .settings { margin-top:16px; }
+    label.check { display:flex; gap:9px; align-items:flex-start; color:var(--muted); margin:10px 0; }
+    .status { margin-top:16px; border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:12px; min-height:48px; color:var(--muted); white-space:pre-wrap; word-break:break-word; }
+    .ok { color:var(--green); } .bad { color:var(--red); } .warn { color:var(--amber); }
+    .small { color:var(--muted); font-size:12px; }
+    @media(max-width:760px){ .grid{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+<header><h1>AIRBUS · HAPTICS</h1><nav><a href="/">← Live controller map</a></nav></header>
+<main>
+  <div class="notice"><b>PS4 Bluetooth note.</b> Extended SDL reports are needed for Bluetooth rumble on many DualShock 4-compatible controllers. SDL warns that enabling them can affect DirectInput handling in other apps until the controller is power-cycled.</div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Changing values</h2>
+      <div class="sub">Short tactile tick for each virtual rotary detent: SPD, HDG, ALT and later V/S/BARO.</div>
+      <div class="value" id="changeValue">12%</div>
+      <input id="changeSlider" type="range" min="0" max="100" step="1" value="12" oninput="syncLabels()" />
+      <div class="row">
+        <button onclick="testHaptic('changing_values')">TEST PULSE</button>
+      </div>
+      <div class="small">For the real rotary feel: SAVE, return to the live map and rotate a stick through detents.</div>
+    </section>
+
+    <section class="card">
+      <h2>Warnings</h2>
+      <div class="sub">Higher-priority tactile warning channel. Later this will carry distinct Master Warning / Master Caution / stall-cue patterns.</div>
+      <div class="value" id="warningValue">70%</div>
+      <input id="warningSlider" type="range" min="0" max="100" step="1" value="70" oninput="syncLabels()" />
+      <div class="row">
+        <button onclick="testHaptic('warnings')">TEST WARNING</button>
+      </div>
+      <div class="small">Current test is a single long pulse. Aircraft-driven warning patterns are intentionally not active yet.</div>
+    </section>
+  </div>
+
+  <section class="card settings">
+    <h2>Test target & transport</h2>
+    <div class="row">
+      <label>Controller
+        <select id="targetRole">
+          <option value="">Both active controllers</option>
+          <option value="left">LEFT</option>
+          <option value="right">RIGHT</option>
+        </select>
+      </label>
+    </div>
+    <label class="check"><input id="hapticsEnabled" type="checkbox" checked /> <span>Enable haptics globally.</span></label>
+    <label class="check"><input id="ps4Extended" type="checkbox" checked /> <span>Enable SDL PS4 Bluetooth extended reports. Changing this setting requires restarting the controller service.</span></label>
+    <div class="row"><button class="primary" onclick="saveSettings()">SAVE SETTINGS</button><button onclick="loadState()">RELOAD</button></div>
+  </section>
+
+  <div class="status" id="status">Loading current settings…</div>
+</main>
+<script>
+function syncLabels(){
+  document.getElementById('changeValue').textContent = `${document.getElementById('changeSlider').value}%`;
+  document.getElementById('warningValue').textContent = `${document.getElementById('warningSlider').value}%`;
+}
+function setStatus(text, cls=''){
+  const el=document.getElementById('status'); el.textContent=text; el.className=`status ${cls}`;
+}
+async function loadState(){
+  try{
+    const r=await fetch('/api/state'); if(!r.ok) throw new Error(r.statusText);
+    const state=await r.json(); const h=state.haptics||{};
+    document.getElementById('hapticsEnabled').checked = h.enabled !== false;
+    document.getElementById('ps4Extended').checked = !!h.ps4_bluetooth_extended_reports;
+    document.getElementById('changeSlider').value = Math.round(Number(h.changing_values?.intensity ?? .12)*100);
+    document.getElementById('warningSlider').value = Math.round(Number(h.warnings?.intensity ?? .70)*100);
+    syncLabels();
+    setStatus(`Loaded. Online roles: ${(state.enabled_roles||[]).filter(k=>state.roles?.[k]?.online).join(', ') || 'none'}`);
+  }catch(e){ setStatus(`Load failed: ${e.message}`,'bad'); }
+}
+function settingsPayload(){
+  return {
+    enabled: document.getElementById('hapticsEnabled').checked,
+    ps4_bluetooth_extended_reports: document.getElementById('ps4Extended').checked,
+    changing_values: { enabled:true, intensity:Number(document.getElementById('changeSlider').value)/100, duration_ms:24 },
+    warnings: { enabled:true, intensity:Number(document.getElementById('warningSlider').value)/100, duration_ms:650 }
+  };
+}
+async function saveSettings(){
+  try{
+    const r=await fetch('/api/haptics',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(settingsPayload())});
+    const body=await r.json(); if(!r.ok) throw new Error(body.detail||r.statusText);
+    setStatus(body.restart_required ? 'Saved. Restart the controller service for the PS4 Bluetooth transport change to take effect.' : 'Saved. Intensity changes are live.','ok');
+  }catch(e){ setStatus(`Save failed: ${e.message}`,'bad'); }
+}
+async function testHaptic(kind){
+  try{
+    await saveSettings();
+    const role=document.getElementById('targetRole').value;
+    const r=await fetch(`/api/haptics/test/${kind}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(role?{role}:{})});
+    const body=await r.json(); if(!r.ok) throw new Error(body.detail||r.statusText);
+    const test=body.test; const lines=[`${kind} · ${Math.round(test.intensity*100)}% · ${test.duration_ms} ms`];
+    for(const [rname,result] of Object.entries(test.results||{})){
+      if(result.ok) lines.push(`${rname}: OK via ${result.selected_method}`);
+      else lines.push(`${rname}: FAILED · ${JSON.stringify(result)}`);
+    }
+    setStatus(lines.join('\n'), Object.values(test.results||{}).some(x=>x.ok)?'ok':'bad');
+  }catch(e){ setStatus(`Test failed: ${e.message}`,'bad'); }
+}
+loadState();
+</script>
+</body>
+</html>
