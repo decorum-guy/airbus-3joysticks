@@ -2,6 +2,16 @@
 
 Status: validation in progress for the MSFS 2020 aircraft reported by SimConnect as `A320neo Global Livery`.
 
+## Aircraft identity gate
+
+Aircraft implementation matters: legacy Asobo, FlyByWire A32NX and iniBuilds A320neo do not share one universal cockpit-event namespace.
+
+`powershell -ExecutionPolicy Bypass -File .\scripts\aircraft-identify.ps1` is a read-only diagnostic that combines the live SimConnect `TITLE` / ATC identity with local MSFS package metadata. It finds `UserCfg.opt`, resolves `InstalledPackagesPath`, scans likely A320 `aircraft.cfg` files and records package `manifest.json` creator/version/base-container evidence.
+
+The normal `stock-airbus-button-probe.ps1` now runs the same identity check first. It only starts the stock Asobo event probe when the loaded aircraft is classified as `asobo_legacy_a320neo`; otherwise it stops before sending a cockpit event. Explicit package metadata overrides a reused human-readable livery title.
+
+`A320neo Global Livery` is also recognized as a high-confidence legacy/default Asobo title when package files cannot be inspected, but package metadata remains stronger evidence when available.
+
 ## What probe v1 established
 
 The MobiFlight WASM transport is healthy (`MF.Ping` -> `MF.Pong`), but the first guessed FCU H-events were not valid production evidence. In particular the user observed no effect from the v1 SPD/MACH, LOC, or APPR H-event candidates. Do not promote these v1 guesses:
