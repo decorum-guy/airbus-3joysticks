@@ -7,7 +7,7 @@ import uvicorn
 
 from .config import ConfigStore
 from .flybywire_profile import promote_flybywire_profile
-from .runtime import Runtime
+from .production_runtime import ProductionRuntime
 from .web import create_app
 
 
@@ -38,7 +38,7 @@ def main() -> None:
     host = str(cfg["server"].get("host", "0.0.0.0"))
     port = int(cfg["server"].get("port", 8765))
 
-    runtime = Runtime(config)
+    runtime = ProductionRuntime(config)
     app = create_app(runtime)
     lan_ip = _lan_ip()
 
