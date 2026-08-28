@@ -34,12 +34,17 @@ class Runtime:
         self.assignment_target: str | None = None
         self.last_input: dict[str, Any] | None = None
         self.last_action: dict[str, Any] | None = None
+        self.last_haptic_test: dict[str, Any] | None = None
         self._previous_buttons: dict[str, set[str]] = {}
         self._task: asyncio.Task | None = None
         self._stopping = False
 
     async def start(self) -> None:
-        self.controllers = ControllerBackend()
+        cfg = self.config_store.snapshot()
+        haptics = cfg.get("haptics", {})
+        self.controllers = ControllerBackend(
+            enable_ps4_bt_rumble=bool(haptics.get("ps4_bluetooth_extended_reports", False))
+        )
         self.bridge.start()
         self._stopping = False
         self._task = asyncio.create_task(self._loop(), name="controller-runtime")
@@ -75,6 +80,15 @@ class Runtime:
 
     def replace_bindings(self, role: str, bindings: list[dict[str, Any]]) -> None:
         self.config_store.replace_bindings(role, bindings)
+
+    def update_haptics(self, haptics: dict[str, Any]) -> dict[str, Any]:
+        previous = self.config_store.snapshot().get("haptics", {})
+        updated = self.config_store.update_haptics(haptics)
+        restart_required = bool(
+            previous.get("ps4_bluetooth_extended_reports")
+            != updated.get("ps4_bluetooth_extended_reports")
+        )
+        return {"haptics": updated, "restart_required": restart_required}
 
     def _find_device_for_saved_identity(
         self,
@@ -131,6 +145,42 @@ class Runtime:
             if key:
                 used.add(key)
         return result
+
+    def test_haptic(self, kind: str, role: str | None = None) -> dict[str, Any]:
+        if kind not in {"changing_values", "warnings"}:
+            raise ValueError("kind must be changing_values or warnings")
+        if role is not None and role not in ROLES:
+            raise ValueError("unknown role")
+        if self.controllers is None:
+            raise RuntimeError("controller backend is not running")
+
+        cfg = self.config_store.snapshot()
+        haptics = cfg.get("haptics", {})
+        section = haptics.get(kind, {})
+        strength = float(section.get("intensity", 0.0))
+        duration_ms = int(section.get("duration_ms", 100))
+        snapshots = self.controllers.poll()
+        role_devices = self._role_devices(snapshots)
+
+        target_roles = [role] if role else list(enabled_roles(cfg))
+        results: dict[str, Any] = {}
+        for target_role in target_roles:
+            device_key = role_devices.get(target_role)
+            if not device_key:
+                results[target_role] = {"ok": False, "error": "role is not online"}
+                continue
+            results[target_role] = self.controllers.rumble_detailed(device_key, strength, duration_ms)
+
+        payload = {
+            "kind": kind,
+            "role": role,
+            "intensity": strength,
+            "duration_ms": duration_ms,
+            "results": results,
+            "at": time.time(),
+        }
+        self.last_haptic_test = copy.deepcopy(payload)
+        return payload
 
     def _record_input(self, role: str, trigger: str, label: str, result: str) -> None:
         self.last_input = {
@@ -236,12 +286,17 @@ class Runtime:
                     action,
                 )
 
-            rotary_cfg = cfg["rotary"]
-            if rotary_cfg.get("rumble") and self.controllers:
+            haptics = cfg.get("haptics", {})
+            change = haptics.get("changing_values", {})
+            if (
+                haptics.get("enabled", True)
+                and change.get("enabled", True)
+                and self.controllers
+            ):
                 self.controllers.rumble(
                     device_key,
-                    float(rotary_cfg.get("rumble_strength", 0.12)),
-                    int(rotary_cfg.get("rumble_ms", 18)),
+                    float(change.get("intensity", 0.12)),
+                    int(change.get("duration_ms", 24)),
                 )
 
     def _maybe_assign(self, snapshots: dict[str, dict[str, Any]]) -> bool:
@@ -322,6 +377,8 @@ class Runtime:
             "assignment_target": self.assignment_target,
             "simconnect": self.bridge.state(),
             "rotary": copy.deepcopy(cfg["rotary"]),
+            "haptics": copy.deepcopy(cfg.get("haptics", {})),
+            "last_haptic_test": copy.deepcopy(self.last_haptic_test),
             "last_input": copy.deepcopy(self.last_input),
             "last_action": copy.deepcopy(self.last_action),
             "config_path": str(self.config_store.path),
