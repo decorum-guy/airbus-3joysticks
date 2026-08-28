@@ -38,12 +38,16 @@ def main() -> None:
 
     runtime = Runtime(config)
     app = create_app(runtime)
+    lan_ip = _lan_ip()
 
-    print("\nAirbus 3 Joysticks")
+    print("\nAirbus 3 Joysticks · live controller service")
     print(f"Config: {config.path}")
-    print(f"Local panel: http://127.0.0.1:{port}")
-    print(f"LAN panel:   http://{_lan_ip()}:{port}")
-    print("Use the LAN address only on a trusted private network.\n")
+    print(f"Local dashboard: http://127.0.0.1:{port}/")
+    print(f"Local haptics:   http://127.0.0.1:{port}/haptics")
+    print(f"Local bindings:  http://127.0.0.1:{port}/editor")
+    print(f"LAN dashboard:   http://{lan_ip}:{port}/")
+    print(f"LAN haptics:     http://{lan_ip}:{port}/haptics")
+    print("Use LAN addresses only on a trusted private network.\n")
 
     uvicorn.run(app, host=host, port=port, log_level="info")
 
