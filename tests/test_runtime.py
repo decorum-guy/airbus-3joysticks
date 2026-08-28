@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from airbus3j.config import ConfigStore
-from airbus3j.runtime import Runtime, enabled_roles
+from airbus3j.runtime import Runtime, enabled_roles, rotary_precision_scales
 
 
 class FakeBridge:
@@ -55,6 +55,13 @@ def test_center_role_can_be_enabled_without_losing_profile(tmp_path: Path):
     cfg["features"]["center_controller_enabled"] = True
     assert enabled_roles(cfg) == ("left", "center", "right")
     assert cfg["bindings"]["center"]
+
+
+def test_vs_uses_a_more_precise_rotary_profile_than_other_fcu_controls():
+    assert rotary_precision_scales("right", "right") == (1.5, 1.5)
+    assert rotary_precision_scales("left", "left") == (1.0, 1.0)
+    assert rotary_precision_scales("left", "right") == (1.0, 1.0)
+    assert rotary_precision_scales("right", "left") == (1.0, 1.0)
 
 
 def test_disabled_center_is_not_resolved_to_a_device(tmp_path: Path):
