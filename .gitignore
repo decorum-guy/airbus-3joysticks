@@ -13,3 +13,4 @@ build/
 diagnostics-report.json
 fcu-probe-report.json
 rumble-probe-report.json
+vs-dec-probe-report.json
