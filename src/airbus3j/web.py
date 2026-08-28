@@ -23,7 +23,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         finally:
             await runtime.stop()
 
-    app = FastAPI(title="Airbus 3 Joysticks", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Airbus 3 Joysticks", version="0.2.0", lifespan=lifespan)
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -39,11 +39,34 @@ def create_app(runtime: Runtime) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        return {"ok": True, "simconnect": runtime.bridge.state()}
+        state = runtime.public_state()
+        return {
+            "ok": True,
+            "ready": state["readiness"]["ready"],
+            "readiness": state["readiness"],
+            "simconnect": state["simconnect"],
+        }
 
     @app.get("/api/state")
     async def state() -> dict[str, Any]:
         return runtime.public_state()
+
+    @app.get("/api/preflight")
+    async def preflight() -> dict[str, Any]:
+        state = runtime.public_state()
+        return {
+            "ready": state["readiness"]["ready"],
+            "readiness": state["readiness"],
+            "roles": {
+                key: {
+                    "enabled": role["enabled"],
+                    "online": role["online"],
+                    "device": role["runtime_device"],
+                }
+                for key, role in state["roles"].items()
+            },
+            "simconnect": state["simconnect"],
+        }
 
     @app.post("/api/assign/cancel")
     async def cancel_assignment() -> dict[str, Any]:
@@ -55,7 +78,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         if role not in ROLES:
             raise HTTPException(status_code=404, detail="Unknown role")
         runtime.arm_assignment(role)
-        return {"ok": True, "assignment_target": role}
+        return {"ok": True, "assignment_target": runtime.assignment_target}
 
     @app.delete("/api/assign/{role}")
     async def clear_assignment(role: str) -> dict[str, Any]:
