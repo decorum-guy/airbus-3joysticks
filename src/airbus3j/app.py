@@ -6,7 +6,8 @@ import socket
 import uvicorn
 
 from .config import ConfigStore
-from .runtime import Runtime
+from .flybywire_profile import promote_flybywire_profile
+from .production_runtime import ProductionRuntime
 from .web import create_app
 
 
@@ -32,16 +33,20 @@ def _lan_ip() -> str:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = ConfigStore()
+    promotion = promote_flybywire_profile(config)
     cfg = config.snapshot()
     host = str(cfg["server"].get("host", "0.0.0.0"))
     port = int(cfg["server"].get("port", 8765))
 
-    runtime = Runtime(config)
+    runtime = ProductionRuntime(config)
     app = create_app(runtime)
     lan_ip = _lan_ip()
 
     print("\nAirbus 3 Joysticks · live controller service")
     print(f"Config: {config.path}")
+    print("Aircraft profile: FlyByWire A32NX · guarded production controls")
+    if promotion["promoted"]:
+        print(f"Promoted {len(promotion['promoted'])} previously-pending Airbus button binding(s).")
     print(f"Local dashboard: http://127.0.0.1:{port}/")
     print(f"Local haptics:   http://127.0.0.1:{port}/haptics")
     print(f"Local bindings:  http://127.0.0.1:{port}/editor")
