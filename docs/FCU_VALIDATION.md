@@ -12,7 +12,7 @@ Hardware/simulator validation is authoritative. Generic SimConnect events must n
 
 | FCU control | Candidate event(s) | Result | Notes |
 | --- | --- | --- | --- |
-| SPD rotary | `AP_SPD_VAR_INC` / `AP_SPD_VAR_DEC` | **REJECTED / unsafe for production** | Focused probe started with SimVar 140 kt. The first INC changed it to 101 kt; five INC events ended at 105 kt, matching the user's visible FCU report. Five DEC events then ended at 100 kt rather than restoring 140 kt. Do not bind the production SPD rotary to these generic events. Use a verified A320-specific InputEvent/RPN/MobiFlight path instead. |
+| SPD rotary | `AP_SPD_VAR_INC` / `AP_SPD_VAR_DEC` | **Validated** | The original active probe cleanly produced 140→141→140. A later focused probe appeared to show 140→101, but the user clarified that they manually changed the FCU speed to 100 after the probe's initial 140 snapshot and before the scripted increment sequence. From the actual cockpit baseline of 100, the script then correctly produced 101→102→103→104→105 and restored 105→100. The apparent jump was therefore a stale pre-probe snapshot caused by manual interaction, not an event failure. |
 | HDG rotary | `HEADING_BUG_INC` / `HEADING_BUG_DEC` | **Validated** | 70→71→72→73→74→75, visible FCU reported 75, then clean restore 75→70. |
 | ALT rotary | `AP_ALT_VAR_INC` / `AP_ALT_VAR_DEC` | **Validated** | 20000→21000→22000 ft, visible FCU reported 22000, then clean restore to 20000. |
 | V/S clockwise | `AP_VS_VAR_INC` | **Validated for increment** | Focused probe: +1000→+1100→+1200→+1300→+1400→+1500 fpm, visible FCU reported 1500. |
